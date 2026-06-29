@@ -47,7 +47,7 @@ jobs:
             --download-url-prefix "https://github.com/Licoy/codex-runway/releases/download/${GITHUB_REF_NAME}/" \
             -o "dist/appcast-${{ matrix.arch }}.xml" \
             "dist/appcast-${{ matrix.arch }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: CodexRunway-macos-${{ matrix.arch }}
           path: |
@@ -82,7 +82,7 @@ jobs:
 
           These builds are ad-hoc signed and not notarized. Prefer the .dmg download for manual install; if macOS blocks the app, use right-click Open or Privacy & Security > Open Anyway.
           EOF
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release-notes.md
