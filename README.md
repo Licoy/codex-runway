@@ -36,7 +36,7 @@ Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏里随时
 - Apple Silicon：`CodexRunway-macos-arm64.zip`
 - Intel：`CodexRunway-macos-x86_64.zip`
 
-解压后把 `CodexRunway.app` 放到 `Applications` 或任意目录运行。当前构建使用 ad-hoc signing，不配置 App Store 证书，也不做 notarization；首次打开时 macOS 可能需要在 Finder 中右键选择打开。
+解压后把 `CodexRunway.app` 放到 `Applications` 或任意目录运行。
 
 ## 使用前提
 

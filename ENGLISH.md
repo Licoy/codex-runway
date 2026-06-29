@@ -36,7 +36,7 @@ Download the matching zip from GitHub Releases:
 - Apple Silicon: `CodexRunway-macos-arm64.zip`
 - Intel: `CodexRunway-macos-x86_64.zip`
 
-Unzip it and place `CodexRunway.app` in `Applications` or any folder you prefer. Current builds use ad-hoc signing, do not use App Store certificates, and are not notarized. On first launch, macOS may require opening the app from Finder with right click and Open.
+Unzip it and place `CodexRunway.app` in `Applications` or any folder you prefer. 
 
 ## Requirements
 
