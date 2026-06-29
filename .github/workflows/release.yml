@@ -45,9 +45,8 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
             --ed-key-file - \
             --download-url-prefix "https://github.com/Licoy/codex-runway/releases/download/${GITHUB_REF_NAME}/" \
-            -o "appcast-${{ matrix.arch }}.xml" \
+            -o "dist/appcast-${{ matrix.arch }}.xml" \
             "dist/appcast-${{ matrix.arch }}"
-          cp "dist/appcast-${{ matrix.arch }}/appcast-${{ matrix.arch }}.xml" dist/
       - uses: actions/upload-artifact@v4
         with:
           name: CodexRunway-macos-${{ matrix.arch }}
