@@ -77,6 +77,10 @@ swift build -c release
 
 贡献说明见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
+## 社区支持
+
+- [LinuxDO](https://linux.do/)
+
 ## 许可证
 
 本项目遵循仓库中的 [LICENSE](LICENSE)。
