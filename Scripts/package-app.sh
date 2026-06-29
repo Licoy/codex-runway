@@ -34,6 +34,16 @@ mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
 swift build -c release --package-path "$ROOT" --triple "$TRIPLE"
 BIN_DIR="$(swift build -c release --package-path "$ROOT" --triple "$TRIPLE" --show-bin-path)"
 cp "$BIN_DIR/CodexRunway" "$MACOS/CodexRunway"
+if [[ -n "${EXPECTED_MACOS_SDK_MAJOR:-}" ]]; then
+  SDK="$(otool -l "$MACOS/CodexRunway" | awk '$1 == "sdk" { print $2; exit }')"
+  case "$SDK" in
+    "${EXPECTED_MACOS_SDK_MAJOR}".*) ;;
+    *)
+      printf 'Expected macOS SDK %s.x, got %s\n' "$EXPECTED_MACOS_SDK_MAJOR" "${SDK:-unknown}" >&2
+      exit 1
+      ;;
+  esac
+fi
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/Resources/AppIcon.svg" "$RESOURCES/AppIcon.svg"
 cp "$ROOT/Resources/AppIcon.png" "$RESOURCES/AppIcon.png"

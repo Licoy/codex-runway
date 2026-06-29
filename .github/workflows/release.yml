@@ -18,7 +18,7 @@ jobs:
 
   package:
     needs: test
-    runs-on: macos-latest
+    runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +34,7 @@ jobs:
           test -n "$SPARKLE_PRIVATE_KEY" || { echo "Missing SPARKLE_PRIVATE_KEY secret"; exit 1; }
       - name: Package ${{ matrix.arch }}
         env:
+          EXPECTED_MACOS_SDK_MAJOR: "26"
           SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
         run: ARCH=${{ matrix.arch }} bash Scripts/package-app.sh
       - name: Generate appcast ${{ matrix.arch }}
