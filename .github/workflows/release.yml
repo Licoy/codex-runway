@@ -52,6 +52,8 @@ jobs:
           name: CodexRunway-macos-${{ matrix.arch }}
           path: |
             dist/CodexRunway-macos-${{ matrix.arch }}.zip
+            dist/CodexRunway-macos-${{ matrix.arch }}.app.tar.gz
+            dist/CodexRunway-macos-${{ matrix.arch }}.dmg
             dist/appcast-${{ matrix.arch }}.xml
 
   release:
@@ -71,7 +73,11 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             dist/CodexRunway-macos-arm64.zip \
             dist/CodexRunway-macos-x86_64.zip \
+            dist/CodexRunway-macos-arm64.app.tar.gz \
+            dist/CodexRunway-macos-x86_64.app.tar.gz \
+            dist/CodexRunway-macos-arm64.dmg \
+            dist/CodexRunway-macos-x86_64.dmg \
             dist/appcast-arm64.xml \
             dist/appcast-x86_64.xml \
             --title "$tag" \
-            --notes "macOS builds for Apple Silicon and Intel. This release is not notarized."
+            --notes "macOS builds for Apple Silicon and Intel. These builds are ad-hoc signed and not notarized. Prefer the .dmg download for manual install; if macOS blocks the app, use right-click Open or Privacy & Security > Open Anyway."

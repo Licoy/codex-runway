@@ -24,6 +24,9 @@ MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 FRAMEWORKS="$CONTENTS/Frameworks"
 ZIP="$DIST/CodexRunway-macos-${ARCH}.zip"
+TAR_GZ="$DIST/CodexRunway-macos-${ARCH}.app.tar.gz"
+DMG="$DIST/CodexRunway-macos-${ARCH}.dmg"
+DMG_ROOT="$DIST/dmg-${ARCH}"
 
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
@@ -45,12 +48,19 @@ fi
 
 if command -v codesign >/dev/null 2>&1; then
   if [[ -d "$FRAMEWORKS/Sparkle.framework" ]]; then
-    codesign --force --sign - "$FRAMEWORKS/Sparkle.framework" >/dev/null
+    codesign --force --options runtime --sign - "$FRAMEWORKS/Sparkle.framework" >/dev/null
   fi
-  codesign --force --deep --sign - "$APP" >/dev/null
+  codesign --force --deep --options runtime --sign - "$APP" >/dev/null
 fi
 
 mkdir -p "$DIST"
-rm -f "$ZIP"
+rm -rf "$DMG_ROOT"
+rm -f "$ZIP" "$TAR_GZ" "$DMG"
 (cd "$DIST" && /usr/bin/ditto -c -k --keepParent "CodexRunway.app" "$(basename "$ZIP")")
-printf '%s\n' "$ZIP"
+(cd "$DIST" && /usr/bin/tar -czf "$(basename "$TAR_GZ")" "CodexRunway.app")
+mkdir -p "$DMG_ROOT"
+/usr/bin/ditto "$APP" "$DMG_ROOT/CodexRunway.app"
+ln -s /Applications "$DMG_ROOT/Applications"
+hdiutil create -volname "Codex Runway" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG" >/dev/null
+rm -rf "$DMG_ROOT"
+printf '%s\n%s\n%s\n' "$ZIP" "$TAR_GZ" "$DMG"
