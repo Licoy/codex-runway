@@ -47,10 +47,22 @@ if [[ -d "$BIN_DIR/Sparkle.framework" ]]; then
 fi
 
 if command -v codesign >/dev/null 2>&1; then
+  ENTITLEMENTS="$(mktemp)"
+  trap 'rm -f "$ENTITLEMENTS"' EXIT
+  cat >"$ENTITLEMENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
+PLIST
   if [[ -d "$FRAMEWORKS/Sparkle.framework" ]]; then
     codesign --force --options runtime --sign - "$FRAMEWORKS/Sparkle.framework" >/dev/null
   fi
-  codesign --force --deep --options runtime --sign - "$APP" >/dev/null
+  codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP" >/dev/null
 fi
 
 mkdir -p "$DIST"

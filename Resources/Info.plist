@@ -7,7 +7,7 @@
   <key>CFBundleExecutable</key>
   <string>CodexRunway</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.licoy.codex-runway</string>
+  <string>com.github.codex-runway</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
