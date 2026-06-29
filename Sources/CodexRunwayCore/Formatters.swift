@@ -1,0 +1,64 @@
+import Foundation
+
+public enum DurationFormatter {
+    public static func localized(
+        _ seconds: TimeInterval,
+        language: ResolvedLanguage,
+        includeSeconds: Bool = true)
+        -> String
+    {
+        let value = max(0, Int(seconds.rounded(.up)))
+        let days = value / 86_400
+        let hours = (value % 86_400) / 3_600
+        let minutes = (value % 3_600) / 60
+        let seconds = value % 60
+        if language == .simplifiedChinese {
+            var parts: [String] = []
+            if days > 0 {
+                parts.append("\(days)天")
+                if hours > 0 { parts.append("\(hours)小时") }
+                return parts.joined()
+            }
+            if hours > 0 { parts.append("\(hours)小时") }
+            if minutes > 0 || hours > 0 { parts.append("\(minutes)分钟") }
+            if includeSeconds || parts.isEmpty { parts.append("\(seconds)秒") }
+            return parts.joined()
+        }
+        var parts: [String] = []
+        if days > 0 {
+            parts.append(unit(days, singular: "day", plural: "days"))
+            if hours > 0 { parts.append(unit(hours, singular: "hour", plural: "hours")) }
+            return parts.joined(separator: " ")
+        }
+        if hours > 0 { parts.append(unit(hours, singular: "hour", plural: "hours")) }
+        if minutes > 0 || hours > 0 { parts.append(unit(minutes, singular: "minute", plural: "minutes")) }
+        if includeSeconds || parts.isEmpty { parts.append(unit(seconds, singular: "second", plural: "seconds")) }
+        return parts.joined(separator: " ")
+    }
+
+    public static func money(_ value: Decimal) -> String {
+        let number = NSDecimalNumber(decimal: value)
+        return "$" + String(format: "%.4f", number.doubleValue)
+    }
+
+    private static func unit(_ value: Int, singular: String, plural: String) -> String {
+        "\(value) \(value == 1 ? singular : plural)"
+    }
+}
+
+public enum ResetLabelFormatter {
+    public static func shortLabel(
+        for date: Date,
+        now: Date = Date(),
+        language: ResolvedLanguage,
+        calendar: Calendar = .autoupdatingCurrent)
+        -> String
+    {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: language == .simplifiedChinese ? "zh_Hans_CN" : "en_US_POSIX")
+        formatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "HH:mm" : "M/d"
+        return formatter.string(from: date)
+    }
+}

@@ -1,0 +1,314 @@
+import AppKit
+import CodexRunwayCore
+import SwiftUI
+
+@MainActor
+final class StatusController: NSObject, NSPopoverDelegate {
+    let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let statusBarView = StatusBarContentView(frame: .zero)
+    private let popover = NSPopover()
+    let settings = RunwaySettings()
+    lazy var model = RunwayModel(settings: settings)
+    private lazy var updaterService = UpdaterService(settings: settings)
+    private var statusMenu: NSMenu?
+    private var detailsWindow: NSWindow?
+    private var controlPanelWindow: NSWindow?
+    private var eventMonitor: Any?
+    private var localPopoverCloseMonitor: Any?
+    private var globalPopoverCloseMonitor: Any?
+    private var resignActiveObserver: NSObjectProtocol?
+    private var lastEventNumber: Int?
+    private var lastQuotaResetRefresh: Date?
+    private var nextRefresh = Date.distantFuture
+    private var timer: Timer?
+
+    func start() {
+        let button = statusItem.button
+        button?.toolTip = "Codex Runway"
+        button?.target = self
+        button?.action = #selector(handleStatusItemClick(_:))
+        button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        installStatusBarView()
+        settings.onChange = { [weak self] in
+            self?.applyAppearance()
+            self?.model.relabel()
+            self?.updaterService.applyPreferences()
+            self?.scheduleNextRefresh()
+            self?.rebuildHostedViews()
+            self?.updateStatusBarView()
+        }
+        updaterService.applyPreferences()
+        applyAppearance()
+        popover.behavior = .transient
+        popover.animates = false
+        popover.delegate = self
+        popover.contentSize = NSSize(width: 390, height: 560)
+        popover.contentViewController = NSHostingController(rootView: popoverView())
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main)
+        { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+        installEventMonitor()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.tick()
+            }
+        }
+        model.refresh()
+        scheduleNextRefresh()
+    }
+
+    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.modifierFlags.contains(.command) == true { return }
+        handleStatusEvent(NSApp.currentEvent, relativeTo: sender)
+    }
+
+    private func installEventMonitor() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, self.eventHitsStatusButton(event) else { return event }
+            if event.modifierFlags.contains(.command) { return event }
+            self.handleStatusEvent(event, relativeTo: self.statusItem.button)
+            return nil
+        }
+    }
+
+    private func tick() {
+        let now = Date()
+        model.tick(now: now)
+        updateStatusBarView()
+        if let reset = model.nextDueQuotaReset(after: lastQuotaResetRefresh, now: now), !model.isRefreshing {
+            lastQuotaResetRefresh = reset
+            model.refresh()
+            scheduleNextRefresh()
+            return
+        }
+        if now >= nextRefresh, !model.isRefreshing {
+            model.refresh()
+            scheduleNextRefresh()
+        }
+    }
+
+    private func scheduleNextRefresh() {
+        nextRefresh = Date().addingTimeInterval(TimeInterval(settings.preferences.refreshIntervalSeconds))
+    }
+
+    private func applyAppearance() {
+        let appearance: NSAppearance?
+        switch settings.preferences.appearance {
+        case .system:
+            appearance = nil
+        case .light:
+            appearance = NSAppearance(named: .aqua)
+        case .dark:
+            appearance = NSAppearance(named: .darkAqua)
+        }
+        NSApp.appearance = appearance
+        popover.contentViewController?.view.window?.appearance = appearance
+        detailsWindow?.appearance = appearance
+        controlPanelWindow?.appearance = appearance
+    }
+
+    private func rebuildHostedViews() {
+        popover.contentViewController = NSHostingController(rootView: popoverView())
+        if let detailsWindow {
+            detailsWindow.contentViewController = NSHostingController(rootView: popoverView())
+            detailsWindow.title = "Codex Runway"
+        }
+        if let controlPanelWindow {
+            controlPanelWindow.title = settings.l10n.text(.controlPanel)
+        }
+    }
+
+    private func popoverView() -> RunwayPopoverView {
+        RunwayPopoverView(model: model, settings: settings) { [weak self] in
+            self?.showControlPanel()
+        }
+    }
+
+    private func eventHitsStatusButton(_ event: NSEvent) -> Bool {
+        guard let button = statusItem.button, event.window === button.window else { return false }
+        let point = button.convert(event.locationInWindow, from: nil)
+        return button.bounds.contains(point)
+    }
+
+    private func handleStatusEvent(_ event: NSEvent?, relativeTo button: NSStatusBarButton?) {
+        if let event, lastEventNumber == event.eventNumber { return }
+        lastEventNumber = event?.eventNumber
+        let mouseButton = Self.mouseButton(from: event)
+        switch StatusInteraction.route(mouseButton: mouseButton, isPopoverShown: popover.isShown) {
+        case .showMenu:
+            if let button { showMenu(relativeTo: button) }
+        case .showPopover:
+            showPopover()
+        case .closePopover:
+            popover.performClose(nil)
+        }
+    }
+
+    private func showPopover() {
+        guard let button = statusItem.button else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if !popover.isShown {
+            showDetailsWindow()
+        }
+        startPopoverCloseMonitors()
+        model.refreshSessionReport()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        stopPopoverCloseMonitors()
+    }
+
+    private func startPopoverCloseMonitors() {
+        stopPopoverCloseMonitors()
+        localPopoverCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            if self.shouldClosePopover(for: event) {
+                self.closePopover()
+            }
+            return event
+        }
+        globalPopoverCloseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.closePopover() }
+        }
+    }
+
+    private func stopPopoverCloseMonitors() {
+        if let localPopoverCloseMonitor {
+            NSEvent.removeMonitor(localPopoverCloseMonitor)
+            self.localPopoverCloseMonitor = nil
+        }
+        if let globalPopoverCloseMonitor {
+            NSEvent.removeMonitor(globalPopoverCloseMonitor)
+            self.globalPopoverCloseMonitor = nil
+        }
+    }
+
+    private func shouldClosePopover(for event: NSEvent) -> Bool {
+        guard popover.isShown else { return false }
+        if eventHitsStatusButton(event) { return false }
+        if let popoverWindow = popover.contentViewController?.view.window, event.window === popoverWindow {
+            return false
+        }
+        return true
+    }
+
+    private func closePopover() {
+        guard popover.isShown else { return }
+        popover.performClose(nil)
+        stopPopoverCloseMonitors()
+    }
+
+    private func showDetailsWindow() {
+        let window = detailsWindow ?? NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 390, height: 560),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.title = "Codex Runway"
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: popoverView())
+        detailsWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        model.refreshSessionReport()
+    }
+
+    private func showControlPanel() {
+        let window = controlPanelWindow ?? NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 546, height: 662),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.title = settings.l10n.text(.controlPanel)
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 546, height: 662))
+        window.contentViewController = NSHostingController(rootView: ControlPanelView(
+            settings: settings,
+            model: model,
+            checkForUpdates: { [weak self] in self?.updaterService.checkForUpdates() }))
+        controlPanelWindow = window
+        applyAppearance()
+        NSApp.activate(ignoringOtherApps: true)
+        centerControlPanel(window)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func centerControlPanel(_ window: NSWindow) {
+        let visibleFrame = (statusItem.button?.window?.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
+        let origin = NSPoint(
+            x: visibleFrame.midX - window.frame.width / 2,
+            y: visibleFrame.midY - window.frame.height / 2)
+        window.setFrameOrigin(origin)
+    }
+
+    private func showMenu(relativeTo button: NSStatusBarButton) {
+        let menu = NSMenu()
+        populateMenu(menu)
+        statusMenu = menu
+        closePopover()
+        if let event = NSApp.currentEvent {
+            NSMenu.popUpContextMenu(menu, with: event, for: button)
+        } else {
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 2), in: button)
+        }
+    }
+
+    private static func mouseButton(from event: NSEvent?) -> StatusMouseButton {
+        guard let event else { return .left }
+        if event.type == .rightMouseDown || event.type == .rightMouseUp || event.buttonNumber == 1 {
+            return .right
+        }
+        if event.modifierFlags.contains(.control) {
+            return .right
+        }
+        return .left
+    }
+
+    @objc func showDetailsFromMenu() {
+        showPopover()
+    }
+
+    @objc func openDetailsWindowFromMenu() {
+        showDetailsWindow()
+    }
+
+    @objc func openControlPanelFromMenu() {
+        showControlPanel()
+    }
+
+    @objc func refreshFromMenu() {
+        model.refresh()
+        scheduleNextRefresh()
+        showPopover()
+    }
+
+    @objc func checkForUpdatesFromMenu() {
+        updaterService.checkForUpdates()
+    }
+
+    @objc func repairFromMenu() {
+        let alert = NSAlert()
+        alert.messageText = settings.l10n.text(.repairConfirmTitle)
+        alert.informativeText = model.repairWarning
+        alert.addButton(withTitle: settings.l10n.text(.repair))
+        alert.addButton(withTitle: settings.l10n.text(.cancel))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.repairSessions()
+        showPopover()
+    }
+
+    @objc func openCodexFolder() {
+        NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex"))
+    }
+
+    @objc func quit() {
+        NSApplication.shared.terminate(nil)
+    }
+}

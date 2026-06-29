@@ -1,0 +1,161 @@
+import Foundation
+import Testing
+@testable import CodexRunwayCore
+
+@Suite("Codex quota")
+struct QuotaTests {
+    @Test("decodes quota windows and additional limits")
+    func decodesQuotaWindows() throws {
+        let data = """
+        {
+          "plan_type": "pro",
+          "rate_limit": {
+            "primary_window": {"used_percent": 72, "reset_at": 1782711351, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 40, "reset_at": 1783298151, "limit_window_seconds": 604800}
+          },
+          "credits": {"has_credits": true, "unlimited": false, "balance": "12.5"},
+          "additional_rate_limits": [
+            {
+              "limit_name": "Codex Spark",
+              "metered_feature": "spark",
+              "rate_limit": {
+                "primary_window": {"used_percent": 10, "reset_at": 1782711351, "limit_window_seconds": 18000}
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let snapshot = try QuotaSnapshot.decode(from: data, now: Date(timeIntervalSince1970: 1_782_710_000))
+
+        #expect(snapshot.plan == "pro")
+        #expect(snapshot.primary.usedPercent == 72)
+        #expect(snapshot.primary.windowMinutes == 300)
+        #expect(snapshot.secondary?.windowMinutes == 10_080)
+        #expect(snapshot.creditsBalance == 12.5)
+        #expect(snapshot.additionalWindows.first?.name == "Codex Spark")
+        #expect(snapshot.menuBarText == "22 minutes")
+        #expect(snapshot.menuBarText(now: Date(timeIntervalSince1970: 1_782_711_151)) == "3 minutes")
+    }
+
+    @Test("decodes reset credits")
+    func decodesResetCredits() throws {
+        let data = """
+        {
+          "available_count": 1,
+          "credits": [
+            {"id": "c1", "status": "available", "created_at": "2026-06-01T00:00:00Z", "expires_at": "2026-07-01T00:00:00Z"},
+            {"id": "c2", "status": "used", "created_at": 1780272000, "expires_at": 1782864000}
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let snapshot = try ResetCreditsSnapshot.decode(
+            from: data,
+            now: Date(timeIntervalSince1970: 1_782_000_000))
+
+        #expect(snapshot.availableCount == 1)
+        #expect(snapshot.credits.count == 2)
+        #expect(snapshot.credits[0].status == "available")
+        #expect(snapshot.credits[0].remainingSeconds > 0)
+    }
+
+    @Test("quota meter health follows remaining quota thresholds")
+    func quotaMeterHealthThresholds() {
+        #expect(QuotaMeter.health(forUsedPercent: 49) == .green)
+        #expect(QuotaMeter.health(forUsedPercent: 50) == .green)
+        #expect(QuotaMeter.health(forUsedPercent: 51) == .yellow)
+        #expect(QuotaMeter.health(forUsedPercent: 80) == .yellow)
+        #expect(QuotaMeter.health(forUsedPercent: 81) == .red)
+    }
+
+    @Test("quota meters expose remaining percentage and reset text")
+    func quotaMetersExposeProgressValues() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let window = RateWindow(
+            usedPercent: 29,
+            windowMinutes: 300,
+            resetsAt: Date(timeIntervalSince1970: 1_000 + 3 * 3_600 + 7 * 60))
+
+        let meter = QuotaMeter(title: "5-hour", window: window, now: now)
+
+        #expect(meter.remainingPercent == 71)
+        #expect(meter.usedPercent == 29)
+        #expect(meter.health == .green)
+        #expect(meter.resetsAt == window.resetsAt)
+        #expect(meter.resetText == "3 hours 7 minutes")
+    }
+
+    @Test("quota reset is due one second after reset time once")
+    func quotaResetDueAfterOneSecond() {
+        let primaryReset = Date(timeIntervalSince1970: 1_000)
+        let weeklyReset = Date(timeIntervalSince1970: 2_000)
+        let snapshot = QuotaSnapshot(
+            plan: nil,
+            primary: RateWindow(usedPercent: 50, windowMinutes: 300, resetsAt: primaryReset),
+            secondary: RateWindow(usedPercent: 10, windowMinutes: 10_080, resetsAt: weeklyReset),
+            additionalWindows: [],
+            creditsBalance: nil,
+            updatedAt: Date(timeIntervalSince1970: 900))
+
+        #expect(snapshot.nextDueReset(after: nil, now: Date(timeIntervalSince1970: 1_000.9)) == nil)
+        #expect(snapshot.nextDueReset(after: nil, now: Date(timeIntervalSince1970: 1_001)) == primaryReset)
+        #expect(snapshot.nextDueReset(after: primaryReset, now: Date(timeIntervalSince1970: 1_001)) == nil)
+        #expect(snapshot.nextDueReset(after: primaryReset, now: Date(timeIntervalSince1970: 2_001)) == weeklyReset)
+    }
+
+    @Test("reset credit summary filters available credits and finds next expiry")
+    func resetCreditSummary() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let snapshot = ResetCreditsSnapshot(
+            availableCount: 2,
+            credits: [
+                ResetCredit(id: "a", status: "available", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 1_100), remainingSeconds: 100),
+                ResetCredit(id: "b", status: "used", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 1_050), remainingSeconds: 50),
+                ResetCredit(id: "c", status: "available", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 1_300), remainingSeconds: 300),
+            ],
+            updatedAt: now)
+
+        let summary = ResetCreditSummary(snapshot: snapshot)
+
+        #expect(summary.availableCount == 2)
+        #expect(summary.totalCount == 3)
+        #expect(summary.totalRemainingDuration == 400)
+        #expect(summary.nextExpiryDate == Date(timeIntervalSince1970: 1_100))
+        #expect(summary.nextExpiryRemaining == 100)
+    }
+
+    @Test("reset credit summary classifies expiration risk")
+    func resetCreditRiskCounts() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let snapshot = ResetCreditsSnapshot(
+            availableCount: 3,
+            credits: [
+                ResetCredit(id: "stable", status: "available", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 1_000 + 8 * 86_400), remainingSeconds: 8 * 86_400),
+                ResetCredit(id: "expiring", status: "available", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 1_000 + 2 * 86_400), remainingSeconds: 2 * 86_400),
+                ResetCredit(id: "none", status: "available", createdAt: nil, expiresAt: nil, remainingSeconds: 0),
+                ResetCredit(id: "used", status: "used", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 1_100), remainingSeconds: 100),
+            ],
+            updatedAt: now)
+
+        let summary = ResetCreditSummary(snapshot: snapshot)
+
+        #expect(summary.stableAvailableCount == 2)
+        #expect(summary.expiringCount == 1)
+        #expect(summary.unavailableCount == 1)
+        #expect(ResetCreditRisk.classify(snapshot.credits[0]) == .available)
+        #expect(ResetCreditRisk.classify(snapshot.credits[1]) == .expiring)
+        #expect(ResetCreditRisk.classify(snapshot.credits[3]) == .unavailable)
+    }
+
+    @Test("reset credits sort by expiry with no expiry last")
+    func resetCreditsSortByExpiry() {
+        let credits = [
+            ResetCredit(id: "none", status: "available", createdAt: nil, expiresAt: nil, remainingSeconds: 0),
+            ResetCredit(id: "later", status: "available", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 3_000), remainingSeconds: 2_000),
+            ResetCredit(id: "soon", status: "available", createdAt: nil, expiresAt: Date(timeIntervalSince1970: 2_000), remainingSeconds: 1_000),
+        ]
+
+        #expect(ResetCreditSummary.sortedByExpiry(credits).map(\.id) == ["soon", "later", "none"])
+    }
+}

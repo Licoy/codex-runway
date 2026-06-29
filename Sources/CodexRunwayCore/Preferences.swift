@@ -1,0 +1,198 @@
+import Foundation
+
+public enum L10nKey: String, CaseIterable, Sendable {
+    case apiCost
+    case apiCostSource
+    case apiEquivalent
+    case apiTokenPricing
+    case appearance
+    case appearanceDark
+    case appearanceLight
+    case appearanceSystem
+    case auto
+    case about
+    case advanced
+    case account
+    case automaticallyCheckForUpdates
+    case available
+    case availableResets
+    case back
+    case backup
+    case cachedInputTokens
+    case cachedInput
+    case cancel
+    case codexFolder
+    case controlPanel
+    case costShare
+    case costScanFailed
+    case credit
+    case creditsBalance
+    case creditsUsed
+    case currentCycle
+    case currentCycleAmount
+    case cycleStarted
+    case date
+    case duplicate
+    case duplicateIndexIDs
+    case display
+    case estimatedAPICost
+    case expiresRemaining
+    case expiresAt
+    case expiryRisk
+    case expiringSoon
+    case error
+    case checkForUpdates
+    case fiveHourUsage
+    case general
+    case hours
+    case modelBreakdown
+    case noModelCostData
+    case nonCachedInput
+    case inputShort
+    case inputCachedOutput
+    case inputTokens
+    case language
+    case languageEnglish
+    case languageSimplifiedChinese
+    case lastUpdated
+    case later
+    case left
+    case minutes
+    case missing
+    case missingFromIndex
+    case nextResetIn
+    case nextExpiry
+    case noExpiry
+    case noAvailableResetCredits
+    case notLoggedIn
+    case noPreviousIndex
+    case notLoaded
+    case notScanned
+    case ok
+    case openControlPanel
+    case openDetailsWindow
+    case orphan
+    case orphanIndexRows
+    case outputTokens
+    case outputShort
+    case openGithub
+    case tokenComposition
+    case feedbackIssue
+    case historicalUsage
+    case privacy
+    case plan
+    case planAPI
+    case planBusiness
+    case planEdu
+    case planEnterprise
+    case planFree
+    case planPlus
+    case planPro5x
+    case planPro20x
+    case planTeam
+    case planUnknown
+    case plannedEntries
+    case pricingVersion
+    case projectedWeeklyTotal
+    case quota
+    case quit
+    case rawAnalyticsCredits
+    case refresh
+    case refreshInterval
+    case rebuilt
+    case repair
+    case repairConfirmMessage
+    case repairConfirmTitle
+    case repairFailed
+    case repairIndex
+    case resetsIn
+    case resetCredits
+    case resetCreditDetails
+    case runway
+    case seconds
+    case sessionRepair
+    case sessionScanFailed
+    case settings
+    case selfCheck
+    case showDetails
+    case showCostSummary
+    case showSessionRepairSummary
+    case sourceLocalSessions
+    case sourceOnlineSupplement
+    case staleTitles
+    case status
+    case statusAvailable
+    case statusError
+    case statusLogin
+    case statusBarBattery
+    case statusBarBatteryDetailCountdown
+    case statusBarBatteryDetailRemainingPercent
+    case statusBarBatteryDetailStyle
+    case statusBarBatteryScope
+    case statusBarBatteryScopeBoth
+    case statusBarBatteryScopeFiveHour
+    case statusBarBatteryScopeWeekly
+    case statusBarCountdown
+    case statusBarMetersDetailResetTime
+    case statusBarMetersDetailRemainingPercent
+    case statusBarMetersDetailStyle
+    case statusBarMeters
+    case statusBarRings
+    case statusBarStyle
+    case statusUsed
+    case statusWait
+    case statusUnknown
+    case updateAvailable
+    case updateCheckFailed
+    case updateSigningKeyMissing
+    case upToDate
+    case total
+    case totalRemaining
+    case tokens
+    case tokensOnly
+    case threads
+    case turns
+    case unknown
+    case unknownAccount
+    case unknownModels
+    case unavailableCredits
+    case usageAnalyticsUnavailable
+    case used
+    case usdPerCredit
+    case version
+    case weeklyValueEstimate
+    case weeklyUsage
+}
+
+public struct L10n: Sendable {
+    public var language: ResolvedLanguage
+
+    public init(language: ResolvedLanguage) {
+        self.language = language
+    }
+
+    public init(preference: LanguagePreference, localeIdentifier: String = Locale.autoupdatingCurrent.identifier) {
+        self.language = Self.resolve(preference, localeIdentifier: localeIdentifier)
+    }
+
+    public static func resolve(_ preference: LanguagePreference, localeIdentifier: String) -> ResolvedLanguage {
+        switch preference {
+        case .english:
+            return .english
+        case .simplifiedChinese:
+            return .simplifiedChinese
+        case .system:
+            return localeIdentifier.lowercased().hasPrefix("zh") ? .simplifiedChinese : .english
+        }
+    }
+
+    public func text(_ key: L10nKey) -> String {
+        let table = language == .simplifiedChinese ? Self.zhHans : Self.en
+        return table[key] ?? Self.en[key] ?? key.rawValue
+    }
+
+    public static func missingTranslations(for language: ResolvedLanguage) -> [L10nKey] {
+        let table = language == .simplifiedChinese ? zhHans : en
+        return L10nKey.allCases.filter { table[$0] == nil }
+    }
+}

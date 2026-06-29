@@ -1,0 +1,79 @@
+import CodexRunwayCore
+import SwiftUI
+
+@MainActor
+final class RunwaySettings: ObservableObject {
+    @Published private(set) var preferences: RunwayPreferences
+
+    var onChange: (() -> Void)?
+
+    private let store: PreferencesStore
+
+    init(store: PreferencesStore = PreferencesStore()) {
+        self.store = store
+        self.preferences = store.load()
+    }
+
+    var l10n: L10n {
+        L10n(preference: preferences.language)
+    }
+
+    var colorScheme: ColorScheme? {
+        switch preferences.appearance {
+        case .system:
+            return nil
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        }
+    }
+
+    func updateLanguage(_ language: LanguagePreference) {
+        update { $0.language = language }
+    }
+
+    func updateAppearance(_ appearance: AppearancePreference) {
+        update { $0.appearance = appearance }
+    }
+
+    func updateStatusBarDisplayStyle(_ style: StatusBarDisplayStyle) {
+        update { $0.statusBarDisplayStyle = style }
+    }
+
+    func updateStatusBarMetersDetailStyle(_ style: StatusBarMetersDetailStyle) {
+        update { $0.statusBarMetersDetailStyle = style }
+    }
+
+    func updateStatusBarBatteryScope(_ scope: StatusBarBatteryScope) {
+        update { $0.statusBarBatteryScope = scope }
+    }
+
+    func updateStatusBarBatteryDetailStyle(_ style: StatusBarBatteryDetailStyle) {
+        update { $0.statusBarBatteryDetailStyle = style }
+    }
+
+    func updateRefreshInterval(_ seconds: Int) {
+        update { $0.refreshIntervalSeconds = max(60, min(1_800, seconds)) }
+    }
+
+    func updateShowsCostSummary(_ isShown: Bool) {
+        update { $0.showsCostSummary = isShown }
+    }
+
+    func updateShowsSessionRepairSummary(_ isShown: Bool) {
+        update { $0.showsSessionRepairSummary = isShown }
+    }
+
+    func updateAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
+        update { $0.automaticallyChecksForUpdates = isEnabled }
+    }
+
+    private func update(_ change: (inout RunwayPreferences) -> Void) {
+        var next = preferences
+        change(&next)
+        preferences = next
+        store.save(preferences)
+        onChange?()
+    }
+}
