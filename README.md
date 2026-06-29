@@ -21,6 +21,14 @@ Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏里随时
 - 原生 macOS 菜单栏体验，支持浅色、深色、跟随系统和中英文界面。
 - 内置更新检测，保持应用持续可用。
 
+## 截图
+
+<p align="center">
+  <img src="docs/images/1.png" alt="Codex Runway 配额概览" width="260">
+  <img src="docs/images/2.png" alt="Codex Runway 重置次数详情" width="260">
+  <img src="docs/images/3.png" alt="Codex Runway API 等价成本" width="260">
+</p>
+
 ## 安装
 
 从 GitHub Release 下载与你的 Mac 匹配的压缩包：

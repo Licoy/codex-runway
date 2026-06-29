@@ -21,6 +21,14 @@ Codex Runway is a native macOS menu bar app that keeps Codex quota, reset credit
 - Native macOS menu bar experience with light, dark, system appearance, Chinese, and English.
 - Built-in update checks keep the app current.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/1.png" alt="Codex Runway quota overview" width="260">
+  <img src="docs/images/2.png" alt="Codex Runway reset credits details" width="260">
+  <img src="docs/images/3.png" alt="Codex Runway API-equivalent cost" width="260">
+</p>
+
 ## Installation
 
 Download the matching zip from GitHub Releases:
