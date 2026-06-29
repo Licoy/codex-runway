@@ -11,6 +11,16 @@ struct PreferencesTests {
         #expect(L10n.resolve(.system, localeIdentifier: "fr-FR") == .english)
     }
 
+    @Test("system language resolves from preferred languages")
+    func resolvesSystemLanguageFromPreferredLanguages() {
+        #expect(L10n.resolve(.system, preferredLanguages: ["zh-Hans-CN", "en-US"]) == .simplifiedChinese)
+        #expect(L10n.resolve(.system, preferredLanguages: ["en-US", "zh-Hans-CN"]) == .simplifiedChinese)
+        #expect(L10n.resolve(.system, preferredLanguages: []) == .english)
+        #expect(L10n.resolve(.system, preferredLanguages: ["fr-FR"]) == .english)
+        #expect(L10n.resolve(.english, preferredLanguages: ["zh-Hans-CN"]) == .english)
+        #expect(L10n.resolve(.simplifiedChinese, preferredLanguages: ["en-US"]) == .simplifiedChinese)
+    }
+
     @Test("translations fall back to English")
     func translationsFallbackToEnglish() {
         let english = L10n(language: .english)

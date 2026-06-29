@@ -56,14 +56,49 @@ jobs:
             dist/CodexRunway-macos-${{ matrix.arch }}.dmg
             dist/appcast-${{ matrix.arch }}.xml
 
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          ${{ steps.cliff.outputs.content }}
+          EOF
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            printf 'macOS builds for Apple Silicon and Intel.\n' > release-notes.md
+          fi
+          cat >> release-notes.md <<'EOF'
+
+          These builds are ad-hoc signed and not notarized. Prefer the .dmg download for manual install; if macOS blocks the app, use right-click Open or Privacy & Security > Open Anyway.
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
   release:
-    needs: package
+    needs: [package, release-notes]
     runs-on: macos-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: .
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,4 +115,4 @@ jobs:
             dist/appcast-arm64.xml \
             dist/appcast-x86_64.xml \
             --title "$tag" \
-            --notes "macOS builds for Apple Silicon and Intel. These builds are ad-hoc signed and not notarized. Prefer the .dmg download for manual install; if macOS blocks the app, use right-click Open or Privacy & Security > Open Anyway."
+            --notes-file release-notes.md

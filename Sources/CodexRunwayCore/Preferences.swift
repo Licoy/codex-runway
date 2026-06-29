@@ -145,6 +145,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case updateAvailable
     case updateCheckFailed
     case updateSigningKeyMissing
+    case updateUnavailableInDevelopment
     case upToDate
     case total
     case totalRemaining
@@ -171,18 +172,26 @@ public struct L10n: Sendable {
         self.language = language
     }
 
-    public init(preference: LanguagePreference, localeIdentifier: String = Locale.autoupdatingCurrent.identifier) {
+    public init(preference: LanguagePreference, preferredLanguages: [String] = Locale.preferredLanguages) {
+        self.language = Self.resolve(preference, preferredLanguages: preferredLanguages)
+    }
+
+    public init(preference: LanguagePreference, localeIdentifier: String) {
         self.language = Self.resolve(preference, localeIdentifier: localeIdentifier)
     }
 
     public static func resolve(_ preference: LanguagePreference, localeIdentifier: String) -> ResolvedLanguage {
+        resolve(preference, preferredLanguages: [localeIdentifier])
+    }
+
+    public static func resolve(_ preference: LanguagePreference, preferredLanguages: [String]) -> ResolvedLanguage {
         switch preference {
         case .english:
             return .english
         case .simplifiedChinese:
             return .simplifiedChinese
         case .system:
-            return localeIdentifier.lowercased().hasPrefix("zh") ? .simplifiedChinese : .english
+            return preferredLanguages.contains { $0.lowercased().hasPrefix("zh") } ? .simplifiedChinese : .english
         }
     }
 

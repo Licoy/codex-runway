@@ -5,9 +5,14 @@ import Sparkle
 
 @MainActor
 final class UpdaterService: NSObject, SPUUpdaterDelegate {
+    private enum UpdateCheckSource { case manual, automatic }
+
     private let settings: RunwaySettings
     private var updaterController: SPUStandardUpdaterController?
+    private var automaticCheckTimer: Timer?
+    private var isCheckingForLatestRelease = false
     private let latestReleaseURL = URL(string: "https://api.github.com/repos/Licoy/codex-runway/releases/latest")!
+    private static let automaticCheckInterval: TimeInterval = 3_600
 
     init(settings: RunwaySettings) {
         self.settings = settings
@@ -17,13 +22,44 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
     }
 
     func applyPreferences() {
-        updaterController?.updater.automaticallyChecksForUpdates = settings.preferences.automaticallyChecksForUpdates
+        updaterController?.updater.automaticallyChecksForUpdates = false
+        if settings.preferences.automaticallyChecksForUpdates {
+            startAutomaticChecks()
+        } else {
+            stopAutomaticChecks()
+        }
     }
 
     func checkForUpdates() {
-        Task {
+        checkForUpdates(source: .manual)
+    }
+
+    private func checkForUpdates(source: UpdateCheckSource) {
+        switch installReadiness {
+        case .ready:
+            break
+        case .developmentMode:
+            if source == .manual {
+                showAlert(
+                    title: settings.l10n.text(.updateCheckFailed),
+                    message: settings.l10n.text(.updateUnavailableInDevelopment))
+            }
+            return
+        case .signingKeyMissing:
+            if source == .manual {
+                showAlert(
+                    title: settings.l10n.text(.updateCheckFailed),
+                    message: settings.l10n.text(.updateSigningKeyMissing))
+            }
+            return
+        }
+
+        guard !isCheckingForLatestRelease else { return }
+        isCheckingForLatestRelease = true
+        Task { @MainActor in
+            defer { isCheckingForLatestRelease = false }
             let result = await latestReleaseResult()
-            handle(result)
+            handle(result, source: source)
         }
     }
 
@@ -32,11 +68,26 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
     }
 
     private func configureSparkle() {
-        guard hasSparklePublicKey else { return }
+        guard isAppBundle, hasSparklePublicKey else { return }
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: self,
             userDriverDelegate: nil)
+    }
+
+    private func startAutomaticChecks() {
+        guard automaticCheckTimer == nil else { return }
+        checkForUpdates(source: .automatic)
+        automaticCheckTimer = Timer.scheduledTimer(withTimeInterval: Self.automaticCheckInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkForUpdates(source: .automatic)
+            }
+        }
+    }
+
+    private func stopAutomaticChecks() {
+        automaticCheckTimer?.invalidate()
+        automaticCheckTimer = nil
     }
 
     private func latestReleaseResult() async -> UpdateCheckResult {
@@ -53,20 +104,27 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
         }
     }
 
-    private func handle(_ result: UpdateCheckResult) {
+    private func handle(_ result: UpdateCheckResult, source: UpdateCheckSource) {
+        if source == .automatic && !settings.preferences.automaticallyChecksForUpdates { return }
         switch result {
         case .upToDate:
-            showAlert(title: settings.l10n.text(.checkForUpdates), message: settings.l10n.text(.upToDate))
+            if source == .manual {
+                showAlert(title: settings.l10n.text(.checkForUpdates), message: settings.l10n.text(.upToDate))
+            }
         case .updateAvailable:
             guard let updaterController else {
-                showAlert(
-                    title: settings.l10n.text(.updateCheckFailed),
-                    message: settings.l10n.text(.updateSigningKeyMissing))
+                if source == .manual {
+                    showAlert(
+                        title: settings.l10n.text(.updateCheckFailed),
+                        message: settings.l10n.text(.updateSigningKeyMissing))
+                }
                 return
             }
             updaterController.checkForUpdates(nil)
         case .failed(let message):
-            showAlert(title: settings.l10n.text(.updateCheckFailed), message: message)
+            if source == .manual {
+                showAlert(title: settings.l10n.text(.updateCheckFailed), message: message)
+            }
         }
     }
 
@@ -79,8 +137,23 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
     }
 
     private var hasSparklePublicKey: Bool {
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String else { return false }
-        return !key.isEmpty && !key.contains("__")
+        UpdateInstallEnvironment.hasValidSparklePublicKey(sparklePublicKey)
+    }
+
+    private var installReadiness: UpdateInstallReadiness {
+        UpdateInstallEnvironment(
+            bundlePathExtension: Bundle.main.bundleURL.pathExtension,
+            sparklePublicKey: sparklePublicKey,
+            hasUpdater: updaterController != nil)
+            .readiness
+    }
+
+    private var isAppBundle: Bool {
+        Bundle.main.bundleURL.pathExtension.lowercased() == "app"
+    }
+
+    private var sparklePublicKey: String? {
+        Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String
     }
 
     static var currentVersion: String {

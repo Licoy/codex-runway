@@ -38,6 +38,18 @@ Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏里随时
 
 解压后把 `CodexRunway.app` 放到 `Applications` 或任意目录运行。
 
+### macOS 安全阻挡
+
+当前 Release 是 ad-hoc signed，未 notarized。首次打开如果提示“无法验证开发者”或“未经安全验证”，请右键点击 `CodexRunway.app`，选择“打开”，或在“系统设置 > 隐私与安全性”中点击“仍要打开”。
+
+如果提示“CodexRunway.app 已损坏，无法打开。您应该将它移到废纸篓”，通常是下载隔离属性导致的。把 app 放入 `Applications` 后运行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CodexRunway.app
+```
+
+然后再次打开应用。
+
 ## 使用前提
 
 - macOS 12+

@@ -53,6 +53,15 @@ struct UpdateTests {
         #expect(result == .updateAvailable("v0.0.2"))
     }
 
+    @Test("update install readiness distinguishes development and signing states")
+    func updateInstallReadiness() {
+        #expect(UpdateInstallEnvironment(bundlePathExtension: "", sparklePublicKey: nil, hasUpdater: false).readiness == .developmentMode)
+        #expect(UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: nil, hasUpdater: false).readiness == .signingKeyMissing)
+        #expect(UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: "__SPARKLE_PUBLIC_KEY__", hasUpdater: false).readiness == .signingKeyMissing)
+        #expect(UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: "public-key", hasUpdater: false).readiness == .signingKeyMissing)
+        #expect(UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: "public-key", hasUpdater: true).readiness == .ready)
+    }
+
     @Test("old preferences enable automatic updates by default")
     func oldPreferencesEnableAutomaticUpdates() throws {
         let data = """

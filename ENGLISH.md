@@ -36,7 +36,19 @@ Download the matching zip from GitHub Releases:
 - Apple Silicon: `CodexRunway-macos-arm64.zip`
 - Intel: `CodexRunway-macos-x86_64.zip`
 
-Unzip it and place `CodexRunway.app` in `Applications` or any folder you prefer. 
+Unzip it and place `CodexRunway.app` in `Applications` or any folder you prefer.
+
+### macOS Security Blocks
+
+Current releases are ad-hoc signed and not notarized. If macOS says the developer cannot be verified or the app was not checked for malicious software, right-click `CodexRunway.app` and choose Open, or go to System Settings > Privacy & Security and click Open Anyway.
+
+If macOS says `CodexRunway.app` is damaged and should be moved to the Trash, it is usually the download quarantine attribute. After placing the app in `Applications`, run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CodexRunway.app
+```
+
+Then open the app again.
 
 ## Requirements
 
