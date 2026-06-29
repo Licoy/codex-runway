@@ -68,6 +68,7 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
             dist/CodexRunway-macos-arm64.zip \
             dist/CodexRunway-macos-x86_64.zip \
             dist/appcast-arm64.xml \
