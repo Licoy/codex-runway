@@ -33,6 +33,8 @@ BIN_DIR="$(swift build -c release --package-path "$ROOT" --triple "$TRIPLE" --sh
 cp "$BIN_DIR/CodexRunway" "$MACOS/CodexRunway"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/Resources/AppIcon.svg" "$RESOURCES/AppIcon.svg"
+cp "$ROOT/Resources/AppIcon.png" "$RESOURCES/AppIcon.png"
+cp "$ROOT/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 if [[ -n "${SPARKLE_PUBLIC_KEY:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${SPARKLE_PUBLIC_KEY}" "$CONTENTS/Info.plist"
 fi

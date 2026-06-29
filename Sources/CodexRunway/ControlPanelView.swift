@@ -150,6 +150,7 @@ struct ControlPanelView: View {
     private var aboutPane: some View {
         PreferencesPane {
             SettingsSection {
+                AboutLogoView()
                 SectionLabel(l10n.text(.about))
                 InfoRow(title: l10n.text(.version), subtitle: appVersion, value: "Codex Runway")
                 PreferenceToggleRow(
@@ -229,6 +230,30 @@ struct ControlPanelView: View {
 }
 
 private enum ControlPanelTab: Hashable { case general, display, advanced, about }
+
+private struct AboutLogoView: View {
+    var body: some View {
+        Group {
+            if let image = Self.appIconImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 112, height: 112)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.bottom, 4)
+    }
+
+    private static var appIconImage: NSImage? {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png") {
+            return NSImage(contentsOf: url)
+        }
+        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Resources/AppIcon.png")
+        return NSImage(contentsOf: url)
+    }
+}
 
 private extension StatusBarDisplayStyle {
     func title(_ l10n: L10n) -> String {

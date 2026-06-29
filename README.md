@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Resources/AppIcon.png" alt="Codex Runway logo" width="128" height="128">
+</p>
+
 # Codex Runway
 
 中文 | [English](ENGLISH.md)
