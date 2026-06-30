@@ -65,18 +65,40 @@ public struct SessionActivityScanner: Sendable {
     }
 
     public func scan(limit: Int = 5) throws -> SessionActivitySummary {
-        let items = try jsonlFiles().compactMap(parseSession)
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(max(0, limit))
+        let limit = max(0, limit)
+        guard limit > 0 else { return SessionActivitySummary(items: []) }
+        let files = jsonlFiles()
+        let indexRows = try readIndex().sorted { $0.updatedAt > $1.updatedAt }
+        if !indexRows.isEmpty {
+            let filesByID = filesBySessionID(files)
+            var items: [SessionActivityItem] = []
+            for row in indexRows {
+                guard let file = filesByID[row.id] else { continue }
+                if let item = try parseSession(file, title: row.threadName, updatedAt: row.updatedAt) {
+                    items.append(item)
+                }
+                if items.count == limit { break }
+            }
+            return SessionActivitySummary(items: items)
+        }
+        let items = try files
+            .sorted { modificationDate($0) > modificationDate($1) }
+            .prefix(limit)
+            .compactMap { try parseSession($0) }
         return SessionActivitySummary(items: Array(items))
     }
 
-    private func parseSession(_ file: URL) throws -> SessionActivityItem? {
+    private func parseSession(
+        _ file: URL,
+        title providedTitle: String? = nil,
+        updatedAt providedUpdatedAt: Date? = nil)
+        throws -> SessionActivityItem?
+    {
         let text = try String(contentsOf: file)
         var id: String?
         var cwd: String?
-        var title: String?
-        var updatedAt: Date?
+        var title = providedTitle.flatMap(cleanSessionTitle)
+        var updatedAt = providedUpdatedAt
         var state = SessionActivityState.recent
         var currentModel = "unknown-model"
         var byModel: [String: ApiEquivalentTotals] = [:]
@@ -116,11 +138,40 @@ public struct SessionActivityScanner: Sendable {
     private func jsonlFiles() -> [URL] {
         ["sessions", "archived_sessions"].flatMap { folder in
             let root = codexHome.appendingPathComponent(folder, isDirectory: true)
-            guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
                 return [URL]()
             }
             return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "jsonl" }
         }
+    }
+
+    private func readIndex() throws -> [SessionIndexEntry] {
+        let url = codexHome.appendingPathComponent("session_index.jsonl")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        return try String(contentsOf: url).split(separator: "\n").compactMap { line in
+            try? JSONDecoder().decode(SessionIndexEntry.self, from: Data(line.utf8))
+        }
+    }
+
+    private func filesBySessionID(_ files: [URL]) -> [String: URL] {
+        var result: [String: URL] = [:]
+        for file in files {
+            guard let id = sessionID(from: file) else { continue }
+            if let existing = result[id], modificationDate(existing) > modificationDate(file) { continue }
+            result[id] = file
+        }
+        return result
+    }
+
+    private func sessionID(from file: URL) -> String? {
+        let name = file.deletingPathExtension().lastPathComponent
+        let pattern = #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#
+        guard let range = name.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(name[range])
+    }
+
+    private func modificationDate(_ file: URL) -> Date {
+        (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
     private func estimatedCost(_ byModel: [String: ApiEquivalentTotals]) -> Decimal? {
