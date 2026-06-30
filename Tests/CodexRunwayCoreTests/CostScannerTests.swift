@@ -135,6 +135,26 @@ struct CostScannerTests {
         #expect(summary.estimatedUSD == nil)
     }
 
+    @Test("displayable cost excludes unavailable zero token analytics")
+    func displayableCostExcludesUnavailableZeroTokenAnalytics() throws {
+        let window = DateInterval(
+            start: ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z")!,
+            end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!)
+        let unavailable = try ApiEquivalentSummary.decodeAnalytics(
+            from: #"{"data":[{"date":"2026-06-29","totals":{"credits":0,"turns":0,"text_total_tokens":0}}]}"#.data(using: .utf8)!,
+            window: window)
+        let tokensOnly = try ApiEquivalentSummary.decodeAnalytics(
+            from: #"{"data":[{"date":"2026-06-29","totals":{"credits":0,"turns":1,"text_total_tokens":12000}}]}"#.data(using: .utf8)!,
+            window: window)
+        let priced = try ApiEquivalentSummary.decodeAnalytics(
+            from: #"{"data":[{"date":"2026-06-29","totals":{"credits":0,"turns":1,"uncached_text_input_tokens":1000,"text_output_tokens":100}}]}"#.data(using: .utf8)!,
+            window: window)
+
+        #expect(unavailable.isDisplayableCost == false)
+        #expect(tokensOnly.isDisplayableCost)
+        #expect(priced.isDisplayableCost)
+    }
+
     @Test("cost detail splits token classes and hides unknown models")
     func costDetailSplitsTokenClasses() {
         let summary = UsageCostSummary(

@@ -235,7 +235,7 @@ final class RunwayModel: ObservableObject {
             let local = try await Task.detached {
                 try UsageCostScanner().scanAPIEquivalent(window: window, calculatedAt: now)
             }.value
-            if local.totals.totalTokens > 0 {
+            if local.isDisplayableCost {
                 applyCost(local)
                 cacheCost(local)
                 return
@@ -253,8 +253,14 @@ final class RunwayModel: ObservableObject {
                 startDate: Self.apiDateString(now.addingTimeInterval(-30 * 86_400)),
                 endDate: Self.apiDateString(now.addingTimeInterval(86_400)),
                 window: window)
-            applyCost(summary)
-            cacheCost(summary)
+            if summary.isDisplayableCost {
+                applyCost(summary)
+                cacheCost(summary)
+            } else if latestCost != nil {
+                noteCostScanFailure(l10n.text(.usageAnalyticsUnavailable))
+            } else {
+                clearCost(l10n.text(.usageAnalyticsUnavailable))
+            }
         } catch {
             if latestCost != nil {
                 noteCostScanFailure(error.localizedDescription)
@@ -298,7 +304,7 @@ final class RunwayModel: ObservableObject {
     }
 
     private func cacheCost(_ summary: ApiEquivalentSummary) {
-        guard summary.confidence != .unavailable, summary.totals.totalTokens > 0 else { return }
+        guard summary.isDisplayableCost else { return }
         try? costCacheStore.save(summary)
     }
 

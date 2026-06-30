@@ -73,6 +73,10 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
     public var pricingVersion: String
     public var calculatedAt: Date
 
+    public var isDisplayableCost: Bool {
+        confidence != .unavailable && totals.totalTokens > 0
+    }
+
     public static func unavailable(window: DateInterval, warning: String? = nil, calculatedAt: Date = Date()) -> ApiEquivalentSummary {
         ApiEquivalentSummary(
             source: .unavailable,
