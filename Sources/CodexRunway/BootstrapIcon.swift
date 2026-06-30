@@ -26,14 +26,11 @@ enum BootstrapIcon {
     var image: NSImage {
         switch self {
         case .cloudArrowDown:
-            Self.cloudArrowDownImage
+            Self.makeImage(Self.cloudArrowDownSVG)
         case .github:
-            Self.githubImage
+            Self.makeImage(Self.githubSVG)
         }
     }
-
-    private static let cloudArrowDownImage = makeImage(Self.cloudArrowDownSVG)
-    private static let githubImage = makeImage(Self.githubSVG)
 
     private static func makeImage(_ svg: String) -> NSImage {
         let image = NSImage(data: Data(svg.utf8)) ?? NSImage(size: NSSize(width: 16, height: 16))
