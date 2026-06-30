@@ -69,6 +69,18 @@ final class RunwaySettings: ObservableObject {
         update { $0.automaticallyChecksForUpdates = isEnabled }
     }
 
+    func updateQuotaAlertsEnabled(_ isEnabled: Bool) {
+        update { $0.quotaAlertsEnabled = isEnabled }
+    }
+
+    func updateResetCreditAlertsEnabled(_ isEnabled: Bool) {
+        update { $0.resetCreditAlertsEnabled = isEnabled }
+    }
+
+    func updateExportsStatusJSON(_ isEnabled: Bool) {
+        update { $0.exportsStatusJSON = isEnabled }
+    }
+
     private func update(_ change: (inout RunwayPreferences) -> Void) {
         var next = preferences
         change(&next)

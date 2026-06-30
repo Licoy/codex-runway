@@ -57,7 +57,10 @@ struct PreferencesTests {
             refreshIntervalSeconds: 120,
             showsCostSummary: false,
             showsSessionRepairSummary: false,
-            automaticallyChecksForUpdates: false))
+            automaticallyChecksForUpdates: false,
+            quotaAlertsEnabled: true,
+            resetCreditAlertsEnabled: true,
+            exportsStatusJSON: true))
 
         #expect(store.load().language == .english)
         #expect(store.load().appearance == .dark)
@@ -69,6 +72,9 @@ struct PreferencesTests {
         #expect(store.load().showsCostSummary == false)
         #expect(store.load().showsSessionRepairSummary == false)
         #expect(store.load().automaticallyChecksForUpdates == false)
+        #expect(store.load().quotaAlertsEnabled)
+        #expect(store.load().resetCreditAlertsEnabled)
+        #expect(store.load().exportsStatusJSON)
     }
 
     @Test("old preferences use new status bar defaults")
@@ -90,6 +96,9 @@ struct PreferencesTests {
         #expect(preferences.statusBarBatteryScope == .fiveHour)
         #expect(preferences.statusBarBatteryDetailStyle == .countdown)
         #expect(preferences.automaticallyChecksForUpdates)
+        #expect(preferences.quotaAlertsEnabled == false)
+        #expect(preferences.resetCreditAlertsEnabled == false)
+        #expect(preferences.exportsStatusJSON == false)
     }
 
     @Test("reset short label uses time today and date otherwise")

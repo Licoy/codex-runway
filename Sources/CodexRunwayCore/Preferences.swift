@@ -36,6 +36,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case customRange
     case cycleStarted
     case date
+    case burnRate
     case duplicate
     case duplicateIndexIDs
     case display
@@ -57,6 +58,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case inputCachedOutput
     case inputTokens
     case invalidDateRange
+    case exportStatusJSON
+    case exhaustsIn
     case language
     case languageEnglish
     case languageSimplifiedChinese
@@ -68,6 +71,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case missingFromIndex
     case nextResetIn
     case nextExpiry
+    case needsAttention
     case noExpiry
     case noAvailableResetCredits
     case notLoggedIn
@@ -84,6 +88,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case openGithub
     case tokenComposition
     case feedbackIssue
+    case failed
     case historicalUsage
     case privacy
     case plan
@@ -99,11 +104,17 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case planUnknown
     case plannedEntries
     case pricingVersion
+    case projectBreakdown
+    case projectedAtReset
     case projectedWeeklyTotal
     case previousCycle
     case quota
+    case quotaAlertBody
+    case quotaAlertTitle
+    case quotaAlerts
     case quit
     case rawAnalyticsCredits
+    case recent
     case refresh
     case refreshInterval
     case rebuilt
@@ -114,11 +125,15 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case repairIndex
     case resetsIn
     case resetCredits
+    case resetCreditAlertBody
+    case resetCreditAlertTitle
+    case resetCreditAlerts
     case resetCreditDetails
     case runway
     case seconds
     case sessionRepair
     case sessionScanFailed
+    case recentSessions
     case settings
     case selfCheck
     case showDetails

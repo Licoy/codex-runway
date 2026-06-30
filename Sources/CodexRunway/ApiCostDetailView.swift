@@ -40,6 +40,7 @@ struct ApiCostDetailView: View {
                 statGrid(detail)
                 tokenParts(detail.totals)
                 usageRows(detail.dailyRows, title: activeRangeTitle)
+                breakdown(l10n.text(.projectBreakdown), rows: detail.projectRows)
                 breakdown(l10n.text(.modelBreakdown), rows: detail.modelRows)
                 breakdown(l10n.text(.apiCostSource), rows: detail.clientRows)
                 rawReference(detail)

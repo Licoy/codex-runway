@@ -162,6 +162,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         Task { @MainActor [weak self] in self?.focusPopoverWindow() }
         startPopoverCloseMonitors()
         model.refreshSessionReport()
+        model.refreshRecentSessions()
     }
 
     private func focusPopoverWindow() {
@@ -221,6 +222,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         model.refreshSessionReport()
+        model.refreshRecentSessions()
     }
 
     private func showControlPanel() {

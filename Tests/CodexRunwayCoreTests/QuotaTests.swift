@@ -86,6 +86,36 @@ struct QuotaTests {
         #expect(meter.resetText == "3 hours 7 minutes")
     }
 
+    @Test("quota burn projection predicts exhaustion before reset")
+    func quotaBurnProjectionPredictsExhaustion() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let now = start.addingTimeInterval(2 * 3_600)
+        let window = RateWindow(
+            usedPercent: 80,
+            windowMinutes: 300,
+            resetsAt: start.addingTimeInterval(5 * 3_600))
+
+        let projection = try #require(QuotaBurnProjection.make(window: window, now: now))
+
+        #expect(projection.exhaustsAt == now.addingTimeInterval(30 * 60))
+        #expect(projection.projectedUsedPercentAtReset == 100)
+    }
+
+    @Test("quota burn projection estimates reset usage when not exhausted")
+    func quotaBurnProjectionEstimatesResetUsage() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let now = start.addingTimeInterval(2 * 3_600)
+        let window = RateWindow(
+            usedPercent: 20,
+            windowMinutes: 300,
+            resetsAt: start.addingTimeInterval(5 * 3_600))
+
+        let projection = try #require(QuotaBurnProjection.make(window: window, now: now))
+
+        #expect(projection.exhaustsAt == nil)
+        #expect(projection.projectedUsedPercentAtReset == 50)
+    }
+
     @Test("quota reset is due one second after reset time once")
     func quotaResetDueAfterOneSecond() {
         let primaryReset = Date(timeIntervalSince1970: 1_000)
@@ -157,5 +187,44 @@ struct QuotaTests {
         ]
 
         #expect(ResetCreditSummary.sortedByExpiry(credits).map(\.id) == ["soon", "later", "none"])
+    }
+
+    @Test("alert store only returns unseen quota and reset credit alerts")
+    func alertStoreDeduplicatesAlerts() throws {
+        let root = try TemporaryDirectory()
+        let store = RunwayAlertStore(stateURL: root.url.appending(path: "alerts.json"))
+        let now = Date(timeIntervalSince1970: 1_000)
+        let quota = QuotaSnapshot(
+            plan: nil,
+            primary: RateWindow(usedPercent: 96, windowMinutes: 300, resetsAt: Date(timeIntervalSince1970: 2_000)),
+            secondary: nil,
+            additionalWindows: [],
+            creditsBalance: nil,
+            updatedAt: now)
+        let credits = ResetCreditsSnapshot(
+            availableCount: 1,
+            credits: [
+                ResetCredit(
+                    id: "credit-1",
+                    status: "available",
+                    createdAt: nil,
+                    expiresAt: now.addingTimeInterval(2 * 86_400),
+                    remainingSeconds: 2 * 86_400),
+            ],
+            updatedAt: now)
+        let alerts = RunwayAlertDecider.quotaAlerts(quota) + RunwayAlertDecider.resetCreditAlerts(credits)
+
+        #expect(try store.unseen(alerts).map(\.id) == alerts.map(\.id))
+        #expect(try store.unseen(alerts).isEmpty)
+    }
+}
+
+private struct TemporaryDirectory {
+    let url: URL
+
+    init() throws {
+        self.url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 }

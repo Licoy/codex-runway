@@ -35,7 +35,19 @@ struct QuotaMetersView: View {
                 }
             }
             .font(.callout)
+            if let projection = meter.projection {
+                Text(projectionText(projection))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+
+    private func projectionText(_ projection: QuotaBurnProjection) -> String {
+        if let exhaustsAt = projection.exhaustsAt {
+            return "\(l10n.text(.burnRate)): \(l10n.text(.exhaustsIn)) \(duration(exhaustsAt.timeIntervalSince(Date())))"
+        }
+        return "\(l10n.text(.burnRate)): \(l10n.text(.projectedAtReset)) \(projection.projectedUsedPercentAtReset)%"
     }
 
     private func resetText(until date: Date, now: Date) -> String {
@@ -78,6 +90,82 @@ struct RunwayProgressBar: View {
         case .red:
             return Color(nsColor: .systemRed)
         }
+    }
+}
+
+struct RecentSessionsView: View {
+    var sessions: [SessionActivityItem]
+    var l10n: L10n
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(l10n.text(.recentSessions), systemImage: "terminal")
+                .font(.headline)
+            if sessions.isEmpty {
+                Text(l10n.text(.notLoaded)).foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(sessions.prefix(5)) { session in
+                        row(session)
+                    }
+                }
+                .background(RunwaySurface.subtleFill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+            }
+        }
+    }
+
+    private func row(_ session: SessionActivityItem) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(color(for: session.state))
+                .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text("\(session.projectName) · \(stateText(session.state)) · \(tokenText(session.totals.totalTokens)) \(l10n.text(.tokens))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(session.estimatedUSD.map(DurationFormatter.money) ?? "--")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .overlay(alignment: .top) {
+            Rectangle().fill(.separator.opacity(0.25)).frame(height: 1)
+        }
+    }
+
+    private func stateText(_ state: SessionActivityState) -> String {
+        switch state {
+        case .recent:
+            return l10n.text(.recent)
+        case .needsAttention:
+            return l10n.text(.needsAttention)
+        case .failed:
+            return l10n.text(.failed)
+        }
+    }
+
+    private func color(for state: SessionActivityState) -> Color {
+        switch state {
+        case .recent:
+            return Color(nsColor: .systemGreen)
+        case .needsAttention:
+            return Color(nsColor: .systemOrange)
+        case .failed:
+            return Color(nsColor: .systemRed)
+        }
+    }
+
+    private func tokenText(_ value: Int) -> String {
+        if value >= 1_000_000 { return String(format: "%.2fM", Double(value) / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.2fK", Double(value) / 1_000) }
+        return "\(value)"
     }
 }
 

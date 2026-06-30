@@ -125,6 +125,14 @@ struct ControlPanelView: View {
                     title: l10n.text(.showSessionRepairSummary),
                     subtitle: l10n.text(.sessionRepair),
                     binding: repairSummaryBinding)
+                PreferenceToggleRow(
+                    title: l10n.text(.quotaAlerts),
+                    subtitle: l10n.text(.quota),
+                    binding: quotaAlertsBinding)
+                PreferenceToggleRow(
+                    title: l10n.text(.resetCreditAlerts),
+                    subtitle: l10n.text(.resetCredits),
+                    binding: resetCreditAlertsBinding)
             }
         }
     }
@@ -140,6 +148,10 @@ struct ControlPanelView: View {
                     model.refresh()
                     model.refreshSessionReport()
                 }
+                PreferenceToggleRow(
+                    title: l10n.text(.exportStatusJSON),
+                    subtitle: "~/.codex-runway/status.json",
+                    binding: exportsStatusJSONBinding)
                 ActionRow(title: l10n.text(.repairIndex), subtitle: l10n.text(.backup), button: l10n.text(.repair), role: .destructive) {
                     confirmRepair = true
                 }
@@ -222,6 +234,18 @@ struct ControlPanelView: View {
         Binding(
             get: { settings.preferences.automaticallyChecksForUpdates },
             set: { settings.updateAutomaticallyChecksForUpdates($0) })
+    }
+
+    private var quotaAlertsBinding: Binding<Bool> {
+        Binding(get: { settings.preferences.quotaAlertsEnabled }, set: { settings.updateQuotaAlertsEnabled($0) })
+    }
+
+    private var resetCreditAlertsBinding: Binding<Bool> {
+        Binding(get: { settings.preferences.resetCreditAlertsEnabled }, set: { settings.updateResetCreditAlertsEnabled($0) })
+    }
+
+    private var exportsStatusJSONBinding: Binding<Bool> {
+        Binding(get: { settings.preferences.exportsStatusJSON }, set: { settings.updateExportsStatusJSON($0) })
     }
 
     private var appVersion: String {

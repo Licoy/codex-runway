@@ -15,6 +15,7 @@ public struct QuotaMeter: Sendable, Equatable, Identifiable {
     public var resetText: String?
     public var health: QuotaHealth
     public var markerPercents: [Int]
+    public var projection: QuotaBurnProjection?
 
     public init(title: String, window: RateWindow, now: Date = Date(), markerPercents: [Int] = []) {
         self.title = title
@@ -26,6 +27,7 @@ public struct QuotaMeter: Sendable, Equatable, Identifiable {
         }
         self.health = Self.health(forUsedPercent: usedPercent)
         self.markerPercents = markerPercents
+        self.projection = QuotaBurnProjection.make(window: window, now: now)
     }
 
     public static func health(forUsedPercent usedPercent: Int) -> QuotaHealth {
@@ -33,6 +35,35 @@ public struct QuotaMeter: Sendable, Equatable, Identifiable {
         if remaining >= 50 { return .green }
         if remaining >= 20 { return .yellow }
         return .red
+    }
+}
+
+public struct QuotaBurnProjection: Codable, Sendable, Equatable {
+    public var exhaustsAt: Date?
+    public var projectedUsedPercentAtReset: Int
+
+    public static func make(window: RateWindow, now: Date = Date()) -> QuotaBurnProjection? {
+        guard let resetsAt = window.resetsAt,
+              let minutes = window.windowMinutes,
+              minutes > 0,
+              resetsAt > now
+        else { return nil }
+        let used = max(0, min(100, window.usedPercent))
+        guard used > 0 else { return nil }
+        if used >= 100 {
+            return QuotaBurnProjection(exhaustsAt: now, projectedUsedPercentAtReset: 100)
+        }
+        let duration = TimeInterval(minutes * 60)
+        let start = resetsAt.addingTimeInterval(-duration)
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed > 0 else { return nil }
+        let rate = Double(used) / elapsed
+        let projected = min(100, max(0, Int((rate * duration).rounded())))
+        let timeToFull = Double(100 - used) / rate
+        let exhaustsAt = now.addingTimeInterval(timeToFull)
+        return QuotaBurnProjection(
+            exhaustsAt: exhaustsAt < resetsAt ? exhaustsAt : nil,
+            projectedUsedPercentAtReset: projected)
     }
 }
 
