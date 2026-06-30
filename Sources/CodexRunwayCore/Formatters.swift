@@ -67,3 +67,29 @@ public enum ResetLabelFormatter {
         return formatter.string(from: date)
     }
 }
+
+public enum ResetCreditDateFormatter {
+    public static func updatedAt(_ date: Date, language: ResolvedLanguage) -> String {
+        let formatter = formatter(language: language, dateStyle: .medium, timeStyle: .short)
+        return formatter.string(from: date)
+    }
+
+    public static func expiresAt(_ date: Date, language: ResolvedLanguage) -> String {
+        let dateText = formatter(language: language, dateStyle: .short, timeStyle: .none).string(from: date)
+        let timeText = formatter(language: language, dateStyle: .none, timeStyle: .short).string(from: date)
+        return "\(dateText) \(timeText)"
+    }
+
+    private static func formatter(
+        language: ResolvedLanguage,
+        dateStyle: DateFormatter.Style,
+        timeStyle: DateFormatter.Style)
+        -> DateFormatter
+    {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: language == .simplifiedChinese ? "zh_Hans_CN" : "en_US_POSIX")
+        formatter.dateStyle = dateStyle
+        formatter.timeStyle = timeStyle
+        return formatter
+    }
+}

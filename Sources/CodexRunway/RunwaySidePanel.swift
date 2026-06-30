@@ -73,7 +73,7 @@ private struct ResetCreditsDetailView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(l10n.text(.resetCreditDetails))
                     .font(.headline)
-                Text("\(l10n.text(.lastUpdated)) \(Self.updatedFormatter.string(from: summary.updatedAt))")
+                Text("\(l10n.text(.lastUpdated)) \(ResetCreditDateFormatter.updatedAt(summary.updatedAt, language: l10n.language))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -116,13 +116,6 @@ private struct ResetCreditsDetailView: View {
     private func duration(_ seconds: TimeInterval) -> String {
         DurationFormatter.localized(seconds, language: l10n.language, includeSeconds: false)
     }
-
-    private static let updatedFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
 }
 
 private struct ResetMetricCard: View {
@@ -239,19 +232,12 @@ private struct ResetCreditTableRow: View {
     }
 
     private var expiryText: String {
-        credit.expiresAt.map(Self.dateFormatter.string) ?? l10n.text(.noExpiry)
+        credit.expiresAt.map { ResetCreditDateFormatter.expiresAt($0, language: l10n.language) } ?? l10n.text(.noExpiry)
     }
 
     private var remainingText: String {
         credit.expiresAt == nil ? "--" : DurationFormatter.localized(credit.remainingDuration, language: l10n.language, includeSeconds: false)
     }
-
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter
-    }()
 }
 
 private struct StatusPill: View {

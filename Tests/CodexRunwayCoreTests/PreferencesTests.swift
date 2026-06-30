@@ -104,6 +104,18 @@ struct PreferencesTests {
         #expect(ResetLabelFormatter.shortLabel(for: later, now: now, language: .simplifiedChinese, calendar: calendar) == "7/3")
     }
 
+    @Test("reset credit dates follow app language and omit expiry comma")
+    func resetCreditDates() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let updated = try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 30, hour: 16, minute: 26)))
+        let expires = try #require(calendar.date(from: DateComponents(year: 2026, month: 7, day: 12, hour: 9, minute: 50)))
+
+        #expect(ResetCreditDateFormatter.updatedAt(updated, language: .simplifiedChinese) == "2026年6月30日 16:26")
+        #expect(ResetCreditDateFormatter.expiresAt(expires, language: .simplifiedChinese) == "2026/7/12 09:50")
+        #expect(!ResetCreditDateFormatter.expiresAt(expires, language: .english).contains(","))
+    }
+
     @Test("localized durations use readable units")
     func localizedDurationsUseReadableUnits() {
         let seconds: TimeInterval = 3_661
