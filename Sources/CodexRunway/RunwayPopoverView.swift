@@ -5,6 +5,8 @@ import SwiftUI
 struct RunwayPopoverView: View {
     @ObservedObject var model: RunwayModel
     @ObservedObject var settings: RunwaySettings
+    var checkForUpdates: () -> Void
+    var openGitHub: () -> Void
     var openControlPanel: () -> Void
 
     @State private var confirmRepair = false
@@ -72,11 +74,19 @@ struct RunwayPopoverView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Button { model.refresh() } label: {
-                Image(systemName: model.isRefreshing ? "hourglass" : "arrow.clockwise")
+            HStack(spacing: 10) {
+                HeaderActionButton(title: l10n.text(.checkForUpdates), action: checkForUpdates) {
+                    BootstrapIconImage(.cloudArrowDown)
+                }
+                HeaderActionButton(title: "GitHub", action: openGitHub) {
+                    BootstrapIconImage(.github)
+                }
+                HeaderActionButton(title: l10n.text(.refresh)) {
+                    model.refresh()
+                } icon: {
+                    Image(systemName: model.isRefreshing ? "hourglass" : "arrow.clockwise")
+                }
             }
-            .buttonStyle(.borderless)
-            .help(l10n.text(.refresh))
         }
     }
 
@@ -214,5 +224,27 @@ private struct SubscriptionBadge: View {
         case .unknown:
             return l10n.text(.planUnknown)
         }
+    }
+}
+
+private struct HeaderActionButton<Icon: View>: View {
+    var title: String
+    var action: () -> Void
+    @ViewBuilder var icon: Icon
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            icon.frame(width: 14, height: 14)
+            .foregroundStyle(isHovered ? Color.accentColor : Color.primary)
+            .frame(width: 28, height: 24)
+            .background(isHovered ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .onHover { isHovered = $0 }
     }
 }

@@ -30,6 +30,8 @@ struct PreferencesTests {
         #expect(chinese.text(.settings) == "设置")
         #expect(english.text(.updateReadyToInstall) == "Ready to Install")
         #expect(chinese.text(.updateInstallAndRelaunch) == "安装并重启")
+        #expect(english.text(.statusBarMetersDetailBoth) == "Both")
+        #expect(chinese.text(.statusBarMetersDetailBoth) == "两者都显示")
     }
 
     @Test("all localization keys have English and Chinese translations")
@@ -49,7 +51,7 @@ struct PreferencesTests {
             language: .english,
             appearance: .dark,
             statusBarDisplayStyle: .rings,
-            statusBarMetersDetailStyle: .resetTime,
+            statusBarMetersDetailStyle: .both,
             statusBarBatteryScope: .both,
             statusBarBatteryDetailStyle: .remainingPercent,
             refreshIntervalSeconds: 120,
@@ -60,7 +62,7 @@ struct PreferencesTests {
         #expect(store.load().language == .english)
         #expect(store.load().appearance == .dark)
         #expect(store.load().statusBarDisplayStyle == .rings)
-        #expect(store.load().statusBarMetersDetailStyle == .resetTime)
+        #expect(store.load().statusBarMetersDetailStyle == .both)
         #expect(store.load().statusBarBatteryScope == .both)
         #expect(store.load().statusBarBatteryDetailStyle == .remainingPercent)
         #expect(store.load().refreshIntervalSeconds == 120)

@@ -3,7 +3,7 @@ import CodexRunwayCore
 import SwiftUI
 
 struct ControlPanelView: View {
-    private static let githubURL = URL(string: "https://github.com/Licoy/codex-runway")!
+    static let githubURL = URL(string: "https://github.com/Licoy/codex-runway")!
     private static let feedbackURL = URL(string: "https://github.com/Licoy/codex-runway/issues/new")!
 
     @ObservedObject var settings: RunwaySettings
@@ -271,6 +271,7 @@ private extension StatusBarMetersDetailStyle {
         switch self {
         case .remainingPercent: l10n.text(.statusBarMetersDetailRemainingPercent)
         case .resetTime: l10n.text(.statusBarMetersDetailResetTime)
+        case .both: l10n.text(.statusBarMetersDetailBoth)
         }
     }
 }
@@ -348,7 +349,7 @@ private struct PickerRow<Control: View>: View {
     }
 }
 
-private enum ExternalURLLauncher {
+enum ExternalURLLauncher {
     @MainActor
     static func open(_ url: URL) {
         DiagnosticLog.write("open.request url=\(url.absoluteString) bundle=\(Bundle.main.bundlePath) id=\(Bundle.main.bundleIdentifier ?? "nil") activationPolicy=\(NSApp.activationPolicy().rawValue)")

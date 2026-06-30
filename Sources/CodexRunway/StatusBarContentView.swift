@@ -210,6 +210,9 @@ final class StatusBarContentView: NSView {
             return "\(meter.remainingPercent)%"
         case .resetTime:
             return meter.resetsAt.map { ResetLabelFormatter.shortLabel(for: $0, language: language) } ?? "--"
+        case .both:
+            let reset = meter.resetsAt.map { ResetLabelFormatter.shortLabel(for: $0, language: language) } ?? "--"
+            return "\(meter.remainingPercent)% · \(reset)"
         }
     }
 

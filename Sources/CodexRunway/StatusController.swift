@@ -15,7 +15,6 @@ final class StatusController: NSObject, NSPopoverDelegate {
     private var controlPanelWindow: NSWindow?
     private var eventMonitor: Any?
     private var localPopoverCloseMonitor: Any?
-    private var globalPopoverCloseMonitor: Any?
     private var resignActiveObserver: NSObjectProtocol?
     private var lastEventNumber: Int?
     private var lastQuotaResetRefresh: Date?
@@ -123,9 +122,12 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     private func popoverView() -> RunwayPopoverView {
-        RunwayPopoverView(model: model, settings: settings) { [weak self] in
-            self?.showControlPanel()
-        }
+        RunwayPopoverView(
+            model: model,
+            settings: settings,
+            checkForUpdates: { [weak self] in self?.updaterService.checkForUpdates() },
+            openGitHub: { ExternalURLLauncher.open(ControlPanelView.githubURL) },
+            openControlPanel: { [weak self] in self?.showControlPanel() })
     }
 
     private func eventHitsStatusButton(_ event: NSEvent) -> Bool {
@@ -156,8 +158,14 @@ final class StatusController: NSObject, NSPopoverDelegate {
             showDetailsWindow()
         }
         applyAppearance()
+        focusPopoverWindow()
+        Task { @MainActor [weak self] in self?.focusPopoverWindow() }
         startPopoverCloseMonitors()
         model.refreshSessionReport()
+    }
+
+    private func focusPopoverWindow() {
+        popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -173,19 +181,12 @@ final class StatusController: NSObject, NSPopoverDelegate {
             }
             return event
         }
-        globalPopoverCloseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor in self?.closePopover() }
-        }
     }
 
     private func stopPopoverCloseMonitors() {
         if let localPopoverCloseMonitor {
             NSEvent.removeMonitor(localPopoverCloseMonitor)
             self.localPopoverCloseMonitor = nil
-        }
-        if let globalPopoverCloseMonitor {
-            NSEvent.removeMonitor(globalPopoverCloseMonitor)
-            self.globalPopoverCloseMonitor = nil
         }
     }
 

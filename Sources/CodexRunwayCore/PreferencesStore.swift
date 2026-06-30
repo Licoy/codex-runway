@@ -27,6 +27,7 @@ public enum StatusBarDisplayStyle: String, CaseIterable, Codable, Sendable {
 public enum StatusBarMetersDetailStyle: String, CaseIterable, Codable, Sendable {
     case remainingPercent
     case resetTime
+    case both
 }
 
 public enum StatusBarBatteryScope: String, CaseIterable, Codable, Sendable {

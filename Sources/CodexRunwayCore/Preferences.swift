@@ -142,6 +142,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case statusBarCountdown
     case statusBarMetersDetailResetTime
     case statusBarMetersDetailRemainingPercent
+    case statusBarMetersDetailBoth
     case statusBarMetersDetailStyle
     case statusBarMeters
     case statusBarRings
