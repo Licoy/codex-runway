@@ -9,6 +9,7 @@ extension StatusController {
         addSection(l10n.text(.resetCredits), text: model.resetCreditsText, lines: model.resetCreditLines, to: menu)
         addSection(l10n.text(.apiCost), text: model.costText, lines: model.costLines, to: menu)
         addSection(l10n.text(.sessionRepair), text: model.sessionText, lines: model.sessionLines, to: menu)
+        addSection(l10n.text(.recentSessions), text: "\(model.recentSessions.count)", lines: model.recentSessionLines, to: menu)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(menuItem(l10n.text(.showDetails), action: #selector(showDetailsFromMenu)))
         menu.addItem(menuItem(l10n.text(.openDetailsWindow), action: #selector(openDetailsWindowFromMenu)))

@@ -96,6 +96,69 @@ struct CostScannerTests {
         #expect(summary.warnings.isEmpty == false)
     }
 
+    @Test("local API equivalent groups usage by project cwd")
+    func localAPIEquivalentGroupsProjects() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try """
+        {"timestamp":"2026-06-29T00:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/Users/me/dev/codex-runway"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":100,"output_tokens":50,"reasoning_output_tokens":0}}},"turn_context":{"model":"gpt-5.5"}}
+        """.write(to: sessionDir.appending(path: "rollout-project.jsonl"), atomically: true, encoding: .utf8)
+        try """
+        {"timestamp":"2026-06-29T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":0,"output_tokens":25,"reasoning_output_tokens":0}}},"turn_context":{"model":"gpt-5.5"}}
+        """.write(to: sessionDir.appending(path: "rollout-unknown.jsonl"), atomically: true, encoding: .utf8)
+
+        let summary = try UsageCostScanner(codexHome: root.url).scanAPIEquivalent(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(summary.projectRows.map(\.name) == ["codex-runway", "Unknown project"])
+        #expect(summary.projectRows[0].totals.totalTokens == 1_050)
+        #expect(summary.projectRows[1].totals.totalTokens == 525)
+    }
+
+    @Test("project cwd before selected window still groups in-window tokens")
+    func projectCWDCanPrecedeWindow() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try """
+        {"timestamp":"2026-06-28T23:59:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/Users/me/dev/codex-runway"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0}}},"turn_context":{"model":"gpt-5.5"}}
+        """.write(to: sessionDir.appending(path: "rollout-project-before-window.jsonl"), atomically: true, encoding: .utf8)
+
+        let summary = try UsageCostScanner(codexHome: root.url).scanAPIEquivalent(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(summary.projectRows.map(\.name) == ["codex-runway"])
+    }
+
+    @Test("session activity scanner summarizes recent Codex sessions")
+    func sessionActivitySummarizesRecentSessions() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try """
+        {"timestamp":"2026-06-29T00:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/Users/me/dev/codex-runway"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"message","role":"user","content":"Fix the status bar"}}
+        {"timestamp":"2026-06-29T00:02:00Z","type":"event_msg","payload":{"type":"approval_request"}}
+        {"timestamp":"2026-06-29T00:03:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":100,"output_tokens":50,"reasoning_output_tokens":0}}},"turn_context":{"model":"gpt-5.5"}}
+        """.write(to: sessionDir.appending(path: "rollout-s1.jsonl"), atomically: true, encoding: .utf8)
+
+        let summary = try SessionActivityScanner(codexHome: root.url).scan(limit: 5)
+        let session = try #require(summary.items.first)
+
+        #expect(session.title == "Fix the status bar")
+        #expect(session.projectName == "codex-runway")
+        #expect(session.state == .needsAttention)
+        #expect(session.totals.totalTokens == 1_050)
+        #expect(session.estimatedUSD ?? 0 > 0)
+    }
+
     @Test("online analytics estimates dollars from token parts even when credits are zero")
     func analyticsCreditsZeroStillPricesTokenParts() throws {
         let calculatedAt = ISO8601DateFormatter().date(from: "2026-06-30T10:00:00Z")!
@@ -228,6 +291,19 @@ struct CostScannerTests {
             modelRows: [
                 ApiEquivalentBreakdownRow(
                     name: "gpt-5.5",
+                    totals: ApiEquivalentTotals(
+                        totalTokens: 1_000,
+                        uncachedInputTokens: 700,
+                        cachedInputTokens: 200,
+                        outputTokens: 100,
+                        turns: 3,
+                        threads: 1),
+                    estimatedUSD: 1.25,
+                    rawCredits: 0),
+            ],
+            projectRows: [
+                ApiEquivalentBreakdownRow(
+                    name: "codex-runway",
                     totals: ApiEquivalentTotals(
                         totalTokens: 1_000,
                         uncachedInputTokens: 700,

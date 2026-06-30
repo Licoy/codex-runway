@@ -67,6 +67,7 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
     public var totals: ApiEquivalentTotals
     public var dailyRows: [ApiEquivalentDailyRow]
     public var modelRows: [ApiEquivalentBreakdownRow]
+    public var projectRows: [ApiEquivalentBreakdownRow]
     public var clientRows: [ApiEquivalentBreakdownRow]
     public var rawCredits: Double
     public var warnings: [String]
@@ -75,6 +76,69 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
 
     public var isDisplayableCost: Bool {
         confidence != .unavailable && totals.totalTokens > 0
+    }
+
+    public init(
+        source: ApiEquivalentSource,
+        confidence: ApiEquivalentConfidence,
+        window: DateInterval,
+        estimatedUSD: Decimal?,
+        totals: ApiEquivalentTotals,
+        dailyRows: [ApiEquivalentDailyRow],
+        modelRows: [ApiEquivalentBreakdownRow],
+        projectRows: [ApiEquivalentBreakdownRow] = [],
+        clientRows: [ApiEquivalentBreakdownRow],
+        rawCredits: Double,
+        warnings: [String],
+        pricingVersion: String,
+        calculatedAt: Date)
+    {
+        self.source = source
+        self.confidence = confidence
+        self.window = window
+        self.estimatedUSD = estimatedUSD
+        self.totals = totals
+        self.dailyRows = dailyRows
+        self.modelRows = modelRows
+        self.projectRows = projectRows
+        self.clientRows = clientRows
+        self.rawCredits = rawCredits
+        self.warnings = warnings
+        self.pricingVersion = pricingVersion
+        self.calculatedAt = calculatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case confidence
+        case window
+        case estimatedUSD
+        case totals
+        case dailyRows
+        case modelRows
+        case projectRows
+        case clientRows
+        case rawCredits
+        case warnings
+        case pricingVersion
+        case calculatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        source = try container.decode(ApiEquivalentSource.self, forKey: .source)
+        confidence = try container.decode(ApiEquivalentConfidence.self, forKey: .confidence)
+        window = try container.decode(DateInterval.self, forKey: .window)
+        estimatedUSD = try container.decodeIfPresent(Decimal.self, forKey: .estimatedUSD)
+        totals = try container.decode(ApiEquivalentTotals.self, forKey: .totals)
+        dailyRows = try container.decode([ApiEquivalentDailyRow].self, forKey: .dailyRows)
+        modelRows = try container.decode([ApiEquivalentBreakdownRow].self, forKey: .modelRows)
+        projectRows = try container.decodeIfPresent([ApiEquivalentBreakdownRow].self, forKey: .projectRows) ?? []
+        clientRows = try container.decode([ApiEquivalentBreakdownRow].self, forKey: .clientRows)
+        rawCredits = try container.decode(Double.self, forKey: .rawCredits)
+        warnings = try container.decode([String].self, forKey: .warnings)
+        pricingVersion = try container.decode(String.self, forKey: .pricingVersion)
+        calculatedAt = try container.decode(Date.self, forKey: .calculatedAt)
     }
 
     public static func unavailable(window: DateInterval, warning: String? = nil, calculatedAt: Date = Date()) -> ApiEquivalentSummary {
@@ -86,6 +150,7 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
             totals: .zero,
             dailyRows: [],
             modelRows: [],
+            projectRows: [],
             clientRows: [],
             rawCredits: 0,
             warnings: warning.map { [$0] } ?? [],
@@ -118,6 +183,7 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
             totals: totals,
             dailyRows: rows,
             modelRows: breakdown(items.flatMap(\.models)),
+            projectRows: [],
             clientRows: breakdown(items.flatMap(\.clients)),
             rawCredits: rows.reduce(0) { $0 + $1.rawCredits },
             warnings: totals.hasTokenParts ? [] : ["analytics-token-parts-missing"],

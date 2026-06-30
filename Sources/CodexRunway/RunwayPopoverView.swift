@@ -56,6 +56,7 @@ struct RunwayPopoverView: View {
                 if settings.preferences.showsSessionRepairSummary {
                     sessionSummary
                 }
+                RecentSessionsView(sessions: model.recentSessions, l10n: l10n)
             }
         }
     }

@@ -30,6 +30,7 @@ public struct UsageCostScanner: Sendable {
 
     public func scanAPIEquivalent(window: DateInterval, calculatedAt: Date = Date()) throws -> ApiEquivalentSummary {
         var byModel: [String: ApiEquivalentTotals] = [:]
+        var byProject: [String: ApiEquivalentTotals] = [:]
         var byDay: [String: ApiEquivalentTotals] = [:]
         var byDayModel: [String: [String: ApiEquivalentTotals]] = [:]
         var unknown = Set<String>()
@@ -38,6 +39,7 @@ public struct UsageCostScanner: Sendable {
                 file: file,
                 window: window,
                 byModel: &byModel,
+                byProject: &byProject,
                 byDay: &byDay,
                 byDayModel: &byDayModel,
                 unknown: &unknown)
@@ -46,6 +48,18 @@ public struct UsageCostScanner: Sendable {
             let totals = byModel[model] ?? .zero
             let estimated = PricingTable.cost(model: model, totals: totals) ?? PricingTable.equivalentCost(totals: totals)
             return ApiEquivalentBreakdownRow(name: model, totals: totals, estimatedUSD: estimated, rawCredits: 0)
+        }
+        let projectRows = byProject.keys.sorted { lhs, rhs in
+            let left = byProject[lhs]?.totalTokens ?? 0
+            let right = byProject[rhs]?.totalTokens ?? 0
+            return left == right ? lhs < rhs : left > right
+        }.map { project in
+            let totals = byProject[project] ?? .zero
+            return ApiEquivalentBreakdownRow(
+                name: project,
+                totals: totals,
+                estimatedUSD: PricingTable.equivalentCost(totals: totals),
+                rawCredits: 0)
         }
         let dailyRows = byDay.keys.sorted().map { day in
             let totals = byDay[day] ?? .zero
@@ -64,6 +78,7 @@ public struct UsageCostScanner: Sendable {
             totals: totals,
             dailyRows: dailyRows,
             modelRows: modelRows,
+            projectRows: projectRows,
             clientRows: [],
             rawCredits: 0,
             warnings: unknown.sorted().map { "unknown-model:\($0)" },
@@ -97,16 +112,20 @@ public struct UsageCostScanner: Sendable {
         file: URL,
         window: DateInterval,
         byModel: inout [String: ApiEquivalentTotals],
+        byProject: inout [String: ApiEquivalentTotals],
         byDay: inout [String: ApiEquivalentTotals],
         byDayModel: inout [String: [String: ApiEquivalentTotals]],
         unknown: inout Set<String>) throws
     {
         let text = try String(contentsOf: file)
         var currentModel = "unknown-model"
+        var currentProject = SessionProjectName.unknown
         for line in text.split(separator: "\n") {
-            guard let record = try? JSONLineRecord.parse(String(line)),
-                  window.contains(record.timestamp)
-            else { continue }
+            guard let record = try? JSONLineRecord.parse(String(line)) else { continue }
+            if let cwd = record.sessionCWD {
+                currentProject = SessionProjectName.displayName(for: cwd)
+            }
+            guard window.contains(record.timestamp) else { continue }
             if let contextModel = record.contextModel {
                 currentModel = contextModel
             }
@@ -115,6 +134,7 @@ public struct UsageCostScanner: Sendable {
             let totals = ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
             let day = Self.dayString(record.timestamp)
             byModel[model, default: .zero] = byModel[model, default: .zero] + totals
+            byProject[currentProject, default: .zero] = byProject[currentProject, default: .zero] + totals
             byDay[day, default: .zero] = byDay[day, default: .zero] + totals
             byDayModel[day, default: [:]][model, default: .zero] = byDayModel[day, default: [:]][model, default: .zero] + totals
             if PricingTable.price(for: model) == nil { unknown.insert(model) }
@@ -172,7 +192,7 @@ public struct UsageCostScanner: Sendable {
     }
 }
 
-private extension ApiEquivalentTotals {
+extension ApiEquivalentTotals {
     init(usage: TokenUsage, turns: Int, threads: Int) {
         let uncached = max(0, usage.inputTokens - usage.cachedInputTokens)
         self.init(
@@ -189,6 +209,7 @@ struct JSONLineRecord {
     var timestamp: Date
     var model: String?
     var contextModel: String?
+    var sessionCWD: String?
     var lastTokenUsage: TokenUsage?
 
     static func parse(_ line: String) throws -> JSONLineRecord {
@@ -200,10 +221,12 @@ struct JSONLineRecord {
         let turnContext = object["turn_context"] as? [String: Any]
         let contextModel = object["type"] as? String == "turn_context" ? payload?["model"] as? String : nil
         let model = turnContext?["model"] as? String ?? payload?["model"] as? String
+        let sessionCWD = object["type"] as? String == "session_meta" ? payload?["cwd"] as? String : nil
         return JSONLineRecord(
             timestamp: timestamp,
             model: model,
             contextModel: contextModel,
+            sessionCWD: sessionCWD,
             lastTokenUsage: tokenUsage(from: payload))
     }
 

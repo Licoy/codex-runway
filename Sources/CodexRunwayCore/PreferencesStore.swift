@@ -52,6 +52,9 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
     public var showsCostSummary: Bool
     public var showsSessionRepairSummary: Bool
     public var automaticallyChecksForUpdates: Bool
+    public var quotaAlertsEnabled: Bool
+    public var resetCreditAlertsEnabled: Bool
+    public var exportsStatusJSON: Bool
 
     public init(
         language: LanguagePreference = .system,
@@ -63,7 +66,10 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         refreshIntervalSeconds: Int = 300,
         showsCostSummary: Bool = true,
         showsSessionRepairSummary: Bool = true,
-        automaticallyChecksForUpdates: Bool = true)
+        automaticallyChecksForUpdates: Bool = true,
+        quotaAlertsEnabled: Bool = false,
+        resetCreditAlertsEnabled: Bool = false,
+        exportsStatusJSON: Bool = false)
     {
         self.language = language
         self.appearance = appearance
@@ -75,6 +81,9 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         self.showsCostSummary = showsCostSummary
         self.showsSessionRepairSummary = showsSessionRepairSummary
         self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+        self.quotaAlertsEnabled = quotaAlertsEnabled
+        self.resetCreditAlertsEnabled = resetCreditAlertsEnabled
+        self.exportsStatusJSON = exportsStatusJSON
     }
 
     enum CodingKeys: String, CodingKey {
@@ -88,6 +97,9 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         case showsCostSummary
         case showsSessionRepairSummary
         case automaticallyChecksForUpdates
+        case quotaAlertsEnabled
+        case resetCreditAlertsEnabled
+        case exportsStatusJSON
     }
 
     public init(from decoder: Decoder) throws {
@@ -102,6 +114,9 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         showsCostSummary = try container.decodeIfPresent(Bool.self, forKey: .showsCostSummary) ?? true
         showsSessionRepairSummary = try container.decodeIfPresent(Bool.self, forKey: .showsSessionRepairSummary) ?? true
         automaticallyChecksForUpdates = try container.decodeIfPresent(Bool.self, forKey: .automaticallyChecksForUpdates) ?? true
+        quotaAlertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .quotaAlertsEnabled) ?? false
+        resetCreditAlertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .resetCreditAlertsEnabled) ?? false
+        exportsStatusJSON = try container.decodeIfPresent(Bool.self, forKey: .exportsStatusJSON) ?? false
     }
 }
 

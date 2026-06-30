@@ -24,10 +24,12 @@ final class RunwayModel: ObservableObject {
     @Published var resetCreditLines: [DetailLine] = []
     @Published var costLines: [DetailLine] = []
     @Published var sessionLines: [DetailLine] = []
+    @Published var recentSessionLines: [DetailLine] = []
     @Published var quotaMeters: [QuotaMeter] = []
     @Published var resetCreditSummary: ResetCreditSummary?
     @Published var resetCreditDetails: [ResetCreditDetail] = []
     @Published var costDetail: ApiEquivalentSummary?
+    @Published var recentSessions: [SessionActivityItem] = []
     @Published var costScanNote: String?
     @Published var accountDisplay: CodexAccountDisplay
     @Published var lastError: String?
@@ -36,7 +38,11 @@ final class RunwayModel: ObservableObject {
     private let authStore = CodexAuthStore()
     private let quotaClient = QuotaClient()
     private let sessionRepair = SessionRepairService()
+    private let sessionActivityScanner = SessionActivityScanner()
     private let costCacheStore = UsageCostCacheStore()
+    private let alertStore = RunwayAlertStore()
+    private let statusExporter = RunwayStatusExporter()
+    private let notificationService = RunwayNotificationService()
     private let settings: RunwaySettings
     private var latestAuth: CodexAuth?
     private var latestQuota: QuotaSnapshot?
@@ -82,6 +88,13 @@ final class RunwayModel: ObservableObject {
         Task { await refreshSessionReportNow() }
     }
 
+    func refreshRecentSessions() {
+        Task {
+            await refreshRecentSessionsNow()
+            exportStatusIfNeeded()
+        }
+    }
+
     func repairSessions() {
         Task {
             do {
@@ -106,6 +119,7 @@ final class RunwayModel: ObservableObject {
         if let latestResetCredits { applyResetCredits(latestResetCredits) } else { resetCreditsText = l10n.text(.notLoaded) }
         if let latestCost { applyCost(latestCost, clearsScanNote: false) } else { costText = l10n.text(.notScanned); costSubtitle = "" }
         if let latestSessionReport { applySessionReport(latestSessionReport) } else { sessionText = l10n.text(.notScanned) }
+        applyRecentSessions(recentSessions)
     }
 
     private func refreshSessionReportNow() async {
@@ -134,6 +148,47 @@ final class RunwayModel: ObservableObject {
         }
     }
 
+    private func refreshRecentSessionsNow() async {
+        do {
+            let scanner = sessionActivityScanner
+            let summary = try await Task.detached { try scanner.scan(limit: 5) }.value
+            applyRecentSessions(summary.items)
+        } catch {
+            recentSessions = []
+            recentSessionLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+        }
+    }
+
+    private func applyRecentSessions(_ sessions: [SessionActivityItem]) {
+        recentSessions = sessions
+        recentSessionLines = sessions.prefix(5).map { session in
+            let amount = session.estimatedUSD.map(DurationFormatter.money) ?? "--"
+            return DetailLine(
+                title: session.projectName,
+                value: "\(sessionStateText(session.state)) · \(Self.compactNumber(session.totals.totalTokens)) \(l10n.text(.tokens)) · \(amount)")
+        }
+    }
+
+    private func deliverAlerts(_ alerts: [RunwayAlert], enabled: Bool) {
+        guard enabled, !alerts.isEmpty else { return }
+        do {
+            let unseen = try alertStore.unseen(alerts)
+            notificationService.deliver(unseen, l10n: l10n)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func exportStatusIfNeeded() {
+        guard settings.preferences.exportsStatusJSON else { return }
+        let snapshot = RunwayStatusSnapshot(
+            quota: latestQuota.map(RunwayStatusQuota.init),
+            cost: latestCost,
+            sessions: SessionActivitySummary(items: recentSessions))
+        let exporter = statusExporter
+        Task.detached { try? exporter.save(snapshot) }
+    }
+
     private func refreshNow() async {
         isRefreshing = true
         defer { isRefreshing = false }
@@ -142,11 +197,15 @@ final class RunwayModel: ObservableObject {
             let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
             latestQuota = quotaSnapshot
             applyQuota(quotaSnapshot)
+            deliverAlerts(RunwayAlertDecider.quotaAlerts(quotaSnapshot), enabled: settings.preferences.quotaAlertsEnabled)
             let resetSnapshot = try await quotaClient.fetchResetCredits(auth: auth)
             latestResetCredits = resetSnapshot
             applyResetCredits(resetSnapshot)
+            deliverAlerts(RunwayAlertDecider.resetCreditAlerts(resetSnapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
             await scanCost(quotaSnapshot, auth: auth)
             await refreshSessionReportNow()
+            await refreshRecentSessionsNow()
+            exportStatusIfNeeded()
             lastError = nil
         } catch {
             statusText = l10n.text(.statusError)
@@ -382,6 +441,17 @@ final class RunwayModel: ObservableObject {
             return l10n.text(.statusUsed)
         default:
             return l10n.text(.statusUnknown)
+        }
+    }
+
+    private func sessionStateText(_ state: SessionActivityState) -> String {
+        switch state {
+        case .recent:
+            return l10n.text(.recent)
+        case .needsAttention:
+            return l10n.text(.needsAttention)
+        case .failed:
+            return l10n.text(.failed)
         }
     }
 
