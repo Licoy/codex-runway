@@ -193,6 +193,11 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case totalRemaining
     case tokens
     case tokensOnly
+    case testNotification
+    case testNotificationBody
+    case testNotificationDevelopmentMode
+    case testNotificationSubtitle
+    case testNotificationTitle
     case threads
     case thisMonth
     case turns

@@ -12,6 +12,7 @@ struct ControlPanelView: View {
 
     @State private var selectedTab = ControlPanelTab.general
     @State private var confirmRepair = false
+    @State private var notificationMessage: String?
     private var l10n: L10n { settings.l10n }
 
     var body: some View {
@@ -38,6 +39,11 @@ struct ControlPanelView: View {
             Button(l10n.text(.cancel), role: .cancel) {}
         } message: {
             Text(model.repairWarning)
+        }
+        .alert(l10n.text(.testNotification), isPresented: notificationMessageBinding) {
+            Button(l10n.text(.ok), role: .cancel) {}
+        } message: {
+            Text(notificationMessage ?? "")
         }
     }
 
@@ -137,6 +143,12 @@ struct ControlPanelView: View {
                     title: l10n.text(.resetCreditAlerts),
                     subtitle: l10n.text(.resetCreditAlertsDescription),
                     binding: resetCreditAlertsBinding)
+                ActionRow(
+                    title: l10n.text(.testNotification),
+                    subtitle: l10n.text(.testNotificationSubtitle),
+                    button: l10n.text(.testNotification)) {
+                        notificationMessage = model.testNotification()
+                    }
             }
         }
     }
@@ -228,6 +240,12 @@ struct ControlPanelView: View {
 
     private var costSummaryBinding: Binding<Bool> {
         Binding(get: { settings.preferences.showsCostSummary }, set: { settings.updateShowsCostSummary($0) })
+    }
+
+    private var notificationMessageBinding: Binding<Bool> {
+        Binding(
+            get: { notificationMessage != nil },
+            set: { if !$0 { notificationMessage = nil } })
     }
 
     private var recentSessionsBinding: Binding<Bool> {

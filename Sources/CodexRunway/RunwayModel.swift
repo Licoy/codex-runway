@@ -132,6 +132,15 @@ final class RunwayModel: ObservableObject {
         }
     }
 
+    func testNotification() -> String? {
+        switch notificationService.deliverTest(l10n: l10n) {
+        case .requested:
+            return nil
+        case .developmentMode:
+            return l10n.text(.testNotificationDevelopmentMode)
+        }
+    }
+
     func repairSessions() {
         guard !isRefreshingAll else { return }
         Task {

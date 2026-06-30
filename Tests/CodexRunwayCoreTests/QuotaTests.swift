@@ -217,6 +217,13 @@ struct QuotaTests {
         #expect(try store.unseen(alerts).map(\.id) == alerts.map(\.id))
         #expect(try store.unseen(alerts).isEmpty)
     }
+
+    @Test("user notifications require app bundle runtime")
+    func userNotificationsRequireAppBundleRuntime() {
+        #expect(UserNotificationEnvironment(bundlePathExtension: "app").canUseUserNotifications)
+        #expect(UserNotificationEnvironment(bundlePathExtension: "").canUseUserNotifications == false)
+        #expect(UserNotificationEnvironment(bundlePathExtension: "debug").canUseUserNotifications == false)
+    }
 }
 
 private struct TemporaryDirectory {

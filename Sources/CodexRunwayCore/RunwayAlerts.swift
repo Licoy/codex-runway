@@ -84,3 +84,15 @@ public struct RunwayAlertStore: Sendable {
             .appendingPathComponent("alerts.json")
     }
 }
+
+public struct UserNotificationEnvironment: Sendable, Equatable {
+    public var bundlePathExtension: String
+
+    public init(bundlePathExtension: String) {
+        self.bundlePathExtension = bundlePathExtension
+    }
+
+    public var canUseUserNotifications: Bool {
+        bundlePathExtension.lowercased() == "app"
+    }
+}

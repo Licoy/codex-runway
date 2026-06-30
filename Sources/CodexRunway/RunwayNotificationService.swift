@@ -2,9 +2,17 @@ import CodexRunwayCore
 import Foundation
 @preconcurrency import UserNotifications
 
+enum RunwayNotificationDeliveryResult {
+    case requested
+    case developmentMode
+}
+
 struct RunwayNotificationService {
+    var environment = UserNotificationEnvironment(bundlePathExtension: Bundle.main.bundleURL.pathExtension)
+    private static let delegate = RunwayNotificationDelegate()
+
     func deliver(_ alerts: [RunwayAlert], l10n: L10n) {
-        guard !alerts.isEmpty else { return }
+        guard !alerts.isEmpty, environment.canUseUserNotifications else { return }
         let requests = alerts.map { alert in
             let content = UNMutableNotificationContent()
             content.title = title(for: alert, l10n: l10n)
@@ -12,10 +20,30 @@ struct RunwayNotificationService {
             content.sound = .default
             return UNNotificationRequest(identifier: alert.id, content: content, trigger: nil)
         }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        add(requests)
+    }
+
+    func deliverTest(l10n: L10n) -> RunwayNotificationDeliveryResult {
+        guard environment.canUseUserNotifications else { return .developmentMode }
+        let content = UNMutableNotificationContent()
+        content.title = l10n.text(.testNotificationTitle)
+        content.body = l10n.text(.testNotificationBody)
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "codex-runway-test-\(UUID().uuidString)",
+            content: content,
+            trigger: nil)
+        add([request])
+        return .requested
+    }
+
+    private func add(_ requests: [UNNotificationRequest]) {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = Self.delegate
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             for request in requests {
-                UNUserNotificationCenter.current().add(request)
+                center.add(request)
             }
         }
     }
@@ -45,5 +73,15 @@ struct RunwayNotificationService {
         if name == "5-hour" { return l10n.text(.fiveHourUsage) }
         if name == "Weekly" { return l10n.text(.weeklyUsage) }
         return name
+    }
+}
+
+private final class RunwayNotificationDelegate: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
+    {
+        completionHandler([.banner, .sound])
     }
 }
