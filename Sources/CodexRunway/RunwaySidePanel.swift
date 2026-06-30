@@ -44,7 +44,7 @@ struct DetailPageView: View {
                     l10n: l10n)
             }
         case .apiCost:
-            ApiCostDetailView(detail: model.costDetail, scanNote: model.costScanNote, l10n: l10n)
+            ApiCostDetailView(model: model, l10n: l10n)
         }
     }
 }

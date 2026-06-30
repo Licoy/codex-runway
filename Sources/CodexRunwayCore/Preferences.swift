@@ -21,6 +21,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case cachedInputTokens
     case cachedInput
     case cancel
+    case calculate
+    case calculating
     case codexFolder
     case controlPanel
     case calculatedAt
@@ -31,11 +33,13 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case creditsUsed
     case currentCycle
     case currentCycleAmount
+    case customRange
     case cycleStarted
     case date
     case duplicate
     case duplicateIndexIDs
     case display
+    case endDate
     case estimatedAPICost
     case expiresRemaining
     case expiresAt
@@ -52,6 +56,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case inputShort
     case inputCachedOutput
     case inputTokens
+    case invalidDateRange
     case language
     case languageEnglish
     case languageSimplifiedChinese
@@ -95,6 +100,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case plannedEntries
     case pricingVersion
     case projectedWeeklyTotal
+    case previousCycle
     case quota
     case quit
     case rawAnalyticsCredits
@@ -143,6 +149,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case statusUsed
     case statusWait
     case statusUnknown
+    case startDate
     case updateAvailable
     case updateCheckFailed
     case updateSigningKeyMissing
@@ -153,6 +160,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case tokens
     case tokensOnly
     case threads
+    case thisMonth
     case turns
     case unknown
     case unknownAccount
