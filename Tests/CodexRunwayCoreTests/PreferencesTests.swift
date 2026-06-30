@@ -28,6 +28,8 @@ struct PreferencesTests {
 
         #expect(english.text(.settings) == "Settings")
         #expect(chinese.text(.settings) == "设置")
+        #expect(english.text(.updateReadyToInstall) == "Ready to Install")
+        #expect(chinese.text(.updateInstallAndRelaunch) == "安装并重启")
     }
 
     @Test("all localization keys have English and Chinese translations")

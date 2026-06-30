@@ -145,8 +145,22 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case statusUnknown
     case updateAvailable
     case updateCheckFailed
+    case updateChecking
+    case updateDownloadAndInstall
+    case updateDownloadedReady
+    case updateDownloading
+    case updateExtracting
+    case updateInstallAndRelaunch
+    case updateInstallLater
+    case updateInstalled
+    case updateInstalledMessage
+    case updateInstalling
+    case updateLearnMore
+    case updateReadyToInstall
     case updateSigningKeyMissing
+    case updateSkipVersion
     case updateUnavailableInDevelopment
+    case updateVersionAvailable
     case upToDate
     case total
     case totalRemaining

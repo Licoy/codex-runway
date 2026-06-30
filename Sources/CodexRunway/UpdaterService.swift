@@ -8,7 +8,8 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
     private enum UpdateCheckSource { case manual, automatic }
 
     private let settings: RunwaySettings
-    private var updaterController: SPUStandardUpdaterController?
+    private var updater: SPUUpdater?
+    private var userDriver: RunwaySparkleUserDriver?
     private var automaticCheckTimer: Timer?
     private var isCheckingForLatestRelease = false
     private let latestReleaseURL = URL(string: "https://api.github.com/repos/Licoy/codex-runway/releases/latest")!
@@ -22,7 +23,7 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
     }
 
     func applyPreferences() {
-        updaterController?.updater.automaticallyChecksForUpdates = false
+        updater?.automaticallyChecksForUpdates = false
         if settings.preferences.automaticallyChecksForUpdates {
             startAutomaticChecks()
         } else {
@@ -69,10 +70,19 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
 
     private func configureSparkle() {
         guard isAppBundle, hasSparklePublicKey else { return }
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: self,
-            userDriverDelegate: nil)
+        let userDriver = RunwaySparkleUserDriver(settings: settings)
+        let updater = SPUUpdater(
+            hostBundle: .main,
+            applicationBundle: .main,
+            userDriver: userDriver,
+            delegate: self)
+        do {
+            try updater.start()
+        } catch {
+            return
+        }
+        self.userDriver = userDriver
+        self.updater = updater
     }
 
     private func startAutomaticChecks() {
@@ -112,7 +122,7 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
                 showAlert(title: settings.l10n.text(.checkForUpdates), message: settings.l10n.text(.upToDate))
             }
         case .updateAvailable:
-            guard let updaterController else {
+            guard let updater else {
                 if source == .manual {
                     showAlert(
                         title: settings.l10n.text(.updateCheckFailed),
@@ -120,7 +130,7 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
                 }
                 return
             }
-            updaterController.checkForUpdates(nil)
+            updater.checkForUpdates()
         case .failed(let message):
             if source == .manual {
                 showAlert(title: settings.l10n.text(.updateCheckFailed), message: message)
@@ -144,7 +154,7 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
         UpdateInstallEnvironment(
             bundlePathExtension: Bundle.main.bundleURL.pathExtension,
             sparklePublicKey: sparklePublicKey,
-            hasUpdater: updaterController != nil)
+            hasUpdater: updater != nil)
             .readiness
     }
 
