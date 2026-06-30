@@ -26,11 +26,12 @@ public struct QuotaClient: Sendable {
         auth: CodexAuth,
         startDate: String,
         endDate: String,
-        window: DateInterval) async throws -> ApiEquivalentSummary
+        window: DateInterval,
+        calculatedAt: Date = Date()) async throws -> ApiEquivalentSummary
     {
         let url = try analyticsURL(startDate: startDate, endDate: endDate)
         let data = try await data(url: url, auth: auth)
-        return try ApiEquivalentSummary.decodeAnalytics(from: data, window: window)
+        return try ApiEquivalentSummary.decodeAnalytics(from: data, window: window, calculatedAt: calculatedAt)
     }
 
     private func analyticsURL(startDate: String, endDate: String) throws -> URL {

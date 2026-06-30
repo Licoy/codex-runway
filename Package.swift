@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "CodexRunwayCore", targets: ["CodexRunwayCore"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/Mijick/CalendarView.git", exact: "1.1.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.3"),
     ],
     targets: [
@@ -20,6 +21,7 @@ let package = Package(
             name: "CodexRunway",
             dependencies: [
                 "CodexRunwayCore",
+                .product(name: "MijickCalendarView", package: "CalendarView"),
                 .product(name: "Sparkle", package: "Sparkle"),
             ]),
         .testTarget(

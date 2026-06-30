@@ -2,6 +2,10 @@ import CodexRunwayCore
 import Foundation
 import SwiftUI
 
+enum CostRangeQueryError: Error {
+    case usageUnavailable
+}
+
 @MainActor
 final class RunwayModel: ObservableObject {
     struct DetailLine: Identifiable {
@@ -134,19 +138,7 @@ final class RunwayModel: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
-            var auth: CodexAuth
-            do {
-                auth = try authStore.load()
-            } catch {
-                latestAuth = nil
-                accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
-                throw error
-            }
-            if TokenInspector.isExpired(auth.tokens.accessToken) {
-                try await TokenRefresher().refresh(&auth, store: authStore)
-            }
-            latestAuth = auth
-            accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: latestQuota?.plan)
+            let auth = try await loadValidAuth(preferCached: false)
             let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
             latestQuota = quotaSnapshot
             applyQuota(quotaSnapshot)
@@ -160,6 +152,50 @@ final class RunwayModel: ObservableObject {
             statusText = l10n.text(.statusError)
             lastError = error.localizedDescription
         }
+    }
+
+    func queryCost(range: ApiCostRange) async throws -> ApiEquivalentSummary {
+        let now = Date()
+        do {
+            let local = try await Task.detached {
+                try UsageCostScanner().scanAPIEquivalent(window: range.window, calculatedAt: now)
+            }.value
+            if local.isDisplayableCost {
+                return local
+            }
+        } catch {
+            // Fall through to online analytics.
+        }
+        let auth = try await loadValidAuth(preferCached: true)
+        let summary = try await quotaClient.fetchDailyWorkspaceUsage(
+            auth: auth,
+            startDate: range.apiStartDate,
+            endDate: range.apiEndDate,
+            window: range.window,
+            calculatedAt: now)
+        guard summary.isDisplayableCost else { throw CostRangeQueryError.usageUnavailable }
+        return summary
+    }
+
+    private func loadValidAuth(preferCached: Bool) async throws -> CodexAuth {
+        var auth: CodexAuth
+        if preferCached, let latestAuth {
+            auth = latestAuth
+        } else {
+            do {
+                auth = try authStore.load()
+            } catch {
+                latestAuth = nil
+                accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
+                throw error
+            }
+        }
+        if TokenInspector.isExpired(auth.tokens.accessToken) {
+            try await TokenRefresher().refresh(&auth, store: authStore)
+        }
+        latestAuth = auth
+        accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: latestQuota?.plan)
+        return auth
     }
 
     private func applyQuota(_ quota: QuotaSnapshot) {
