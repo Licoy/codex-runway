@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ApiCostDetailView: View {
     var detail: ApiEquivalentSummary?
+    var scanNote: String?
     var l10n: L10n
 
     var body: some View {
@@ -10,6 +11,7 @@ struct ApiCostDetailView: View {
             if let detail, detail.confidence != .unavailable {
                 VStack(alignment: .leading, spacing: 14) {
                     header(detail)
+                    scanNoteText
                     statGrid(detail)
                     tokenParts(detail.totals)
                     usageRows(detail.dailyRows)
@@ -20,9 +22,12 @@ struct ApiCostDetailView: View {
                 .padding(.top, 2)
                 .padding(.trailing, 4)
             } else {
-                Text(l10n.text(.usageAnalyticsUnavailable))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(l10n.text(.usageAnalyticsUnavailable))
+                        .foregroundStyle(.secondary)
+                    scanNoteText
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -32,13 +37,23 @@ struct ApiCostDetailView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(l10n.text(.apiCost))
                     .font(.headline)
-                Text("\(detail.pricingVersion) · \(sourceText(detail.source))")
+                Text("\(l10n.text(.calculatedAt)) \(calculatedText(detail.calculatedAt)) · \(detail.pricingVersion) · \(sourceText(detail.source))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Text(detail.estimatedUSD.map(DurationFormatter.money) ?? l10n.text(.tokensOnly))
                 .font(.title3.weight(.semibold))
+        }
+    }
+
+    @ViewBuilder
+    private var scanNoteText: some View {
+        if let scanNote {
+            Text("\(l10n.text(.costScanFailed)): \(scanNote)")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
         }
     }
 
@@ -113,6 +128,14 @@ struct ApiCostDetailView: View {
         case .unavailable:
             return l10n.text(.usageAnalyticsUnavailable)
         }
+    }
+
+    private func calculatedText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: l10n.language == .simplifiedChinese ? "zh_Hans_CN" : "en_US_POSIX")
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        return formatter.string(from: date)
     }
 
     private static func tokenText(_ value: Int) -> String {

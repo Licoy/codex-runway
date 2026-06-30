@@ -24,6 +24,7 @@ final class RunwayModel: ObservableObject {
     @Published var resetCreditSummary: ResetCreditSummary?
     @Published var resetCreditDetails: [ResetCreditDetail] = []
     @Published var costDetail: ApiEquivalentSummary?
+    @Published var costScanNote: String?
     @Published var accountDisplay: CodexAccountDisplay
     @Published var lastError: String?
     @Published var isRefreshing = false
@@ -31,6 +32,7 @@ final class RunwayModel: ObservableObject {
     private let authStore = CodexAuthStore()
     private let quotaClient = QuotaClient()
     private let sessionRepair = SessionRepairService()
+    private let costCacheStore = UsageCostCacheStore()
     private let settings: RunwaySettings
     private var latestAuth: CodexAuth?
     private var latestQuota: QuotaSnapshot?
@@ -48,6 +50,9 @@ final class RunwayModel: ObservableObject {
         self.costSubtitle = ""
         self.sessionText = l10n.text(.notScanned)
         self.accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
+        if let cached = costCacheStore.load() {
+            applyCost(cached)
+        }
     }
 
     private var l10n: L10n { settings.l10n }
@@ -59,6 +64,9 @@ final class RunwayModel: ObservableObject {
     func tick(now: Date = Date()) {
         if let latestQuota {
             statusText = menuBarText(for: latestQuota, now: now)
+        }
+        if let latestCost {
+            costSubtitle = costSubtitle(for: latestCost, now: now)
         }
     }
 
@@ -92,7 +100,7 @@ final class RunwayModel: ObservableObject {
         accountDisplay = CodexAccountDisplay.make(auth: latestAuth, quotaPlan: latestQuota?.plan)
         if let latestQuota { applyQuota(latestQuota) } else { statusText = l10n.text(.statusLogin); quotaText = l10n.text(.notLoaded) }
         if let latestResetCredits { applyResetCredits(latestResetCredits) } else { resetCreditsText = l10n.text(.notLoaded) }
-        if let latestCost { applyCost(latestCost) } else { costText = l10n.text(.notScanned); costSubtitle = "" }
+        if let latestCost { applyCost(latestCost, clearsScanNote: false) } else { costText = l10n.text(.notScanned); costSubtitle = "" }
         if let latestSessionReport { applySessionReport(latestSessionReport) } else { sessionText = l10n.text(.notScanned) }
     }
 
@@ -214,21 +222,30 @@ final class RunwayModel: ObservableObject {
               let reset = secondary.resetsAt,
               let minutes = secondary.windowMinutes
         else {
-            clearCost(l10n.text(.usageAnalyticsUnavailable))
+            if latestCost != nil {
+                noteCostScanFailure(l10n.text(.usageAnalyticsUnavailable))
+            } else {
+                clearCost(l10n.text(.usageAnalyticsUnavailable))
+            }
             return
         }
         let window = DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
         let now = Date()
         do {
             let local = try await Task.detached {
-                try UsageCostScanner().scanAPIEquivalent(window: window)
+                try UsageCostScanner().scanAPIEquivalent(window: window, calculatedAt: now)
             }.value
             if local.totals.totalTokens > 0 {
                 applyCost(local)
+                cacheCost(local)
                 return
             }
         } catch {
-            costLines = [DetailLine(title: l10n.text(.costScanFailed), value: error.localizedDescription)]
+            if latestCost != nil {
+                noteCostScanFailure(error.localizedDescription)
+            } else {
+                costLines = [DetailLine(title: l10n.text(.costScanFailed), value: error.localizedDescription)]
+            }
         }
         do {
             let summary = try await quotaClient.fetchDailyWorkspaceUsage(
@@ -237,19 +254,24 @@ final class RunwayModel: ObservableObject {
                 endDate: Self.apiDateString(now.addingTimeInterval(86_400)),
                 window: window)
             applyCost(summary)
+            cacheCost(summary)
         } catch {
-            clearCost(l10n.text(.usageAnalyticsUnavailable))
-            costLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+            if latestCost != nil {
+                noteCostScanFailure(error.localizedDescription)
+            } else {
+                clearCost(l10n.text(.usageAnalyticsUnavailable))
+                costLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+            }
         }
     }
 
-    private func applyCost(_ summary: ApiEquivalentSummary) {
+    private func applyCost(_ summary: ApiEquivalentSummary, now: Date = Date(), clearsScanNote: Bool = true) {
+        if clearsScanNote { costScanNote = nil }
         latestCost = summary
         costDetail = summary
         let amount = summary.estimatedUSD.map(DurationFormatter.money) ?? "--"
         costText = "\(amount) \(l10n.text(.apiEquivalent)) · \(Self.compactNumber(summary.totals.totalTokens)) \(l10n.text(.tokens)) · \(sourceText(summary.source))"
-        let pricing = summary.confidence == .tokensOnly ? l10n.text(.tokensOnly) : l10n.text(.apiTokenPricing)
-        costSubtitle = "\(l10n.text(.weeklyUsage)) · \(pricing) · \(summary.totals.turns) \(l10n.text(.turns))"
+        costSubtitle = costSubtitle(for: summary, now: now)
         costLines = [
             DetailLine(title: l10n.text(.estimatedAPICost), value: amount),
             DetailLine(title: l10n.text(.tokens), value: Self.compactNumber(summary.totals.totalTokens)),
@@ -261,14 +283,35 @@ final class RunwayModel: ObservableObject {
         if summary.source == .onlineAnalytics {
             costLines.append(DetailLine(title: l10n.text(.rawAnalyticsCredits), value: Self.creditText(summary.rawCredits)))
         }
+        if let costScanNote {
+            costLines.append(DetailLine(title: l10n.text(.costScanFailed), value: costScanNote))
+        }
     }
 
     private func clearCost(_ text: String) {
         latestCost = nil
         costDetail = nil
+        costScanNote = nil
         costText = text
         costSubtitle = ""
         costLines = [DetailLine(title: l10n.text(.apiCost), value: text)]
+    }
+
+    private func cacheCost(_ summary: ApiEquivalentSummary) {
+        guard summary.confidence != .unavailable, summary.totals.totalTokens > 0 else { return }
+        try? costCacheStore.save(summary)
+    }
+
+    private func noteCostScanFailure(_ text: String) {
+        guard let latestCost else { return }
+        costScanNote = text
+        applyCost(latestCost, clearsScanNote: false)
+    }
+
+    private func costSubtitle(for summary: ApiEquivalentSummary, now: Date) -> String {
+        let pricing = summary.confidence == .tokensOnly ? l10n.text(.tokensOnly) : l10n.text(.apiTokenPricing)
+        let calculated = DurationFormatter.relativePast(since: summary.calculatedAt, now: now, language: l10n.language)
+        return "\(l10n.text(.weeklyUsage)) · \(pricing) · \(summary.totals.turns) \(l10n.text(.turns)) · \(l10n.text(.calculatedAt)) \(calculated)"
     }
 
     private func windowText(_ window: RateWindow, now: Date) -> String {

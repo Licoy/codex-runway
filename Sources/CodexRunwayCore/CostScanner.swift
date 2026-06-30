@@ -28,7 +28,7 @@ public struct UsageCostScanner: Sendable {
             unknownModels: unknown.sorted())
     }
 
-    public func scanAPIEquivalent(window: DateInterval) throws -> ApiEquivalentSummary {
+    public func scanAPIEquivalent(window: DateInterval, calculatedAt: Date = Date()) throws -> ApiEquivalentSummary {
         var byModel: [String: ApiEquivalentTotals] = [:]
         var byDay: [String: ApiEquivalentTotals] = [:]
         var byDayModel: [String: [String: ApiEquivalentTotals]] = [:]
@@ -67,7 +67,8 @@ public struct UsageCostScanner: Sendable {
             clientRows: [],
             rawCredits: 0,
             warnings: unknown.sorted().map { "unknown-model:\($0)" },
-            pricingVersion: PricingTable.version)
+            pricingVersion: PricingTable.version,
+            calculatedAt: calculatedAt)
     }
 
     private func scan(

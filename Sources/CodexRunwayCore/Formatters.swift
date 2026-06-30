@@ -41,6 +41,11 @@ public enum DurationFormatter {
         return "$" + String(format: "%.4f", number.doubleValue)
     }
 
+    public static func relativePast(since date: Date, now: Date = Date(), language: ResolvedLanguage) -> String {
+        let text = localized(now.timeIntervalSince(date), language: language)
+        return language == .simplifiedChinese ? "\(text)之前" : "\(text) ago"
+    }
+
     private static func unit(_ value: Int, singular: String, plural: String) -> String {
         "\(value) \(value == 1 ? singular : plural)"
     }

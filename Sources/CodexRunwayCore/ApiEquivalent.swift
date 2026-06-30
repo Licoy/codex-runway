@@ -1,18 +1,18 @@
 import Foundation
 
-public enum ApiEquivalentSource: Sendable, Equatable {
+public enum ApiEquivalentSource: String, Codable, Sendable, Equatable {
     case localSessions
     case onlineAnalytics
     case unavailable
 }
 
-public enum ApiEquivalentConfidence: Sendable, Equatable {
+public enum ApiEquivalentConfidence: String, Codable, Sendable, Equatable {
     case priced
     case tokensOnly
     case unavailable
 }
 
-public struct ApiEquivalentTotals: Sendable, Equatable {
+public struct ApiEquivalentTotals: Codable, Sendable, Equatable {
     public var totalTokens: Int
     public var uncachedInputTokens: Int
     public var cachedInputTokens: Int
@@ -43,7 +43,7 @@ public struct ApiEquivalentTotals: Sendable, Equatable {
     }
 }
 
-public struct ApiEquivalentDailyRow: Sendable, Equatable, Identifiable {
+public struct ApiEquivalentDailyRow: Codable, Sendable, Equatable, Identifiable {
     public var id: String { date }
     public var date: String
     public var totals: ApiEquivalentTotals
@@ -51,7 +51,7 @@ public struct ApiEquivalentDailyRow: Sendable, Equatable, Identifiable {
     public var rawCredits: Double
 }
 
-public struct ApiEquivalentBreakdownRow: Sendable, Equatable, Identifiable {
+public struct ApiEquivalentBreakdownRow: Codable, Sendable, Equatable, Identifiable {
     public var id: String { name }
     public var name: String
     public var totals: ApiEquivalentTotals
@@ -59,7 +59,7 @@ public struct ApiEquivalentBreakdownRow: Sendable, Equatable, Identifiable {
     public var rawCredits: Double
 }
 
-public struct ApiEquivalentSummary: Sendable, Equatable {
+public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
     public var source: ApiEquivalentSource
     public var confidence: ApiEquivalentConfidence
     public var window: DateInterval
@@ -71,8 +71,9 @@ public struct ApiEquivalentSummary: Sendable, Equatable {
     public var rawCredits: Double
     public var warnings: [String]
     public var pricingVersion: String
+    public var calculatedAt: Date
 
-    public static func unavailable(window: DateInterval, warning: String? = nil) -> ApiEquivalentSummary {
+    public static func unavailable(window: DateInterval, warning: String? = nil, calculatedAt: Date = Date()) -> ApiEquivalentSummary {
         ApiEquivalentSummary(
             source: .unavailable,
             confidence: .unavailable,
@@ -84,10 +85,11 @@ public struct ApiEquivalentSummary: Sendable, Equatable {
             clientRows: [],
             rawCredits: 0,
             warnings: warning.map { [$0] } ?? [],
-            pricingVersion: PricingTable.version)
+            pricingVersion: PricingTable.version,
+            calculatedAt: calculatedAt)
     }
 
-    public static func decodeAnalytics(from data: Data, window: DateInterval) throws -> ApiEquivalentSummary {
+    public static func decodeAnalytics(from data: Data, window: DateInterval, calculatedAt: Date = Date()) throws -> ApiEquivalentSummary {
         let response = try JSONDecoder().decode(ApiAnalyticsResponse.self, from: data)
         let start = apiDay(window.start)
         let end = apiDay(window.end)
@@ -115,7 +117,8 @@ public struct ApiEquivalentSummary: Sendable, Equatable {
             clientRows: breakdown(items.flatMap(\.clients)),
             rawCredits: rows.reduce(0) { $0 + $1.rawCredits },
             warnings: totals.hasTokenParts ? [] : ["analytics-token-parts-missing"],
-            pricingVersion: PricingTable.version)
+            pricingVersion: PricingTable.version,
+            calculatedAt: calculatedAt)
     }
 
     static func apiDay(_ date: Date) -> String {

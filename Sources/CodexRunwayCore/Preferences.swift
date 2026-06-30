@@ -23,6 +23,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case cancel
     case codexFolder
     case controlPanel
+    case calculatedAt
     case costShare
     case costScanFailed
     case credit

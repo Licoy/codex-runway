@@ -67,6 +67,7 @@ struct CostScannerTests {
     @Test("local API equivalent scans the weekly window and falls back for unknown models")
     func localAPIEquivalentUsesWeeklyWindow() throws {
         let root = try TemporaryDirectory()
+        let calculatedAt = ISO8601DateFormatter().date(from: "2026-06-30T10:00:00Z")!
         let sessionDir = root.url.appending(path: "sessions/2026/06/25", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
         let file = sessionDir.appending(path: "rollout-weekly.jsonl")
@@ -78,8 +79,10 @@ struct CostScannerTests {
         let summary = try UsageCostScanner(codexHome: root.url).scanAPIEquivalent(
             window: DateInterval(
                 start: ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z")!,
-                end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!))
+                end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!),
+            calculatedAt: calculatedAt)
 
+        #expect(summary.calculatedAt == calculatedAt)
         #expect(summary.source == .localSessions)
         #expect(summary.confidence == .priced)
         #expect(summary.totals.uncachedInputTokens == 1_300)
@@ -95,6 +98,7 @@ struct CostScannerTests {
 
     @Test("online analytics estimates dollars from token parts even when credits are zero")
     func analyticsCreditsZeroStillPricesTokenParts() throws {
+        let calculatedAt = ISO8601DateFormatter().date(from: "2026-06-30T10:00:00Z")!
         let data = """
         {"data":[{"date":"2026-06-29","totals":{"credits":0,"turns":26,"threads":4,"cached_text_input_tokens":1000000,"uncached_text_input_tokens":2000000,"text_output_tokens":300000}}]}
         """.data(using: .utf8)!
@@ -103,8 +107,10 @@ struct CostScannerTests {
             from: data,
             window: DateInterval(
                 start: ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z")!,
-                end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!))
+                end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!),
+            calculatedAt: calculatedAt)
 
+        #expect(summary.calculatedAt == calculatedAt)
         #expect(summary.source == .onlineAnalytics)
         #expect(summary.confidence == .priced)
         #expect(summary.rawCredits == 0)
@@ -167,6 +173,75 @@ struct CostScannerTests {
         #expect(UsageCostDetail(summary: summary).models.first?.costShare == 0)
     }
 
+    @Test("cost cache stores and loads the calculated summary")
+    func costCacheStoresSummary() throws {
+        let root = try TemporaryDirectory()
+        let cacheURL = root.url.appending(path: "api-equivalent-cost.json")
+        let calculatedAt = ISO8601DateFormatter().date(from: "2026-06-30T10:00:00Z")!
+        let summary = ApiEquivalentSummary(
+            source: .localSessions,
+            confidence: .priced,
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!),
+            estimatedUSD: 1.25,
+            totals: ApiEquivalentTotals(
+                totalTokens: 1_000,
+                uncachedInputTokens: 700,
+                cachedInputTokens: 200,
+                outputTokens: 100,
+                turns: 3,
+                threads: 1),
+            dailyRows: [
+                ApiEquivalentDailyRow(
+                    date: "2026-06-29",
+                    totals: ApiEquivalentTotals(
+                        totalTokens: 1_000,
+                        uncachedInputTokens: 700,
+                        cachedInputTokens: 200,
+                        outputTokens: 100,
+                        turns: 3,
+                        threads: 1),
+                    estimatedUSD: 1.25,
+                    rawCredits: 0),
+            ],
+            modelRows: [
+                ApiEquivalentBreakdownRow(
+                    name: "gpt-5.5",
+                    totals: ApiEquivalentTotals(
+                        totalTokens: 1_000,
+                        uncachedInputTokens: 700,
+                        cachedInputTokens: 200,
+                        outputTokens: 100,
+                        turns: 3,
+                        threads: 1),
+                    estimatedUSD: 1.25,
+                    rawCredits: 0),
+            ],
+            clientRows: [],
+            rawCredits: 0,
+            warnings: [],
+            pricingVersion: "test",
+            calculatedAt: calculatedAt)
+        let store = UsageCostCacheStore(cacheURL: cacheURL)
+
+        try store.save(summary)
+        let loaded = try #require(store.load())
+
+        #expect(loaded == summary)
+    }
+
+    @Test("cost cache ignores missing or corrupt files")
+    func costCacheIgnoresMissingOrCorruptFiles() throws {
+        let root = try TemporaryDirectory()
+        let cacheURL = root.url.appending(path: "api-equivalent-cost.json")
+        let store = UsageCostCacheStore(cacheURL: cacheURL)
+
+        #expect(store.load() == nil)
+        try "not-json".write(to: cacheURL, atomically: true, encoding: .utf8)
+
+        #expect(store.load() == nil)
+    }
 }
 
 private struct TemporaryDirectory {

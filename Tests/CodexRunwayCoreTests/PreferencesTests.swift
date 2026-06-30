@@ -111,6 +111,15 @@ struct PreferencesTests {
         #expect(DurationFormatter.localized(305 * 3_600 + 54 * 60, language: .english) == "12 days 17 hours")
     }
 
+    @Test("relative past durations mention ago")
+    func relativePastDurationsMentionAgo() {
+        let calculatedAt = Date(timeIntervalSince1970: 1_000)
+        let now = Date(timeIntervalSince1970: 1_030)
+
+        #expect(DurationFormatter.relativePast(since: calculatedAt, now: now, language: .simplifiedChinese) == "30秒之前")
+        #expect(DurationFormatter.relativePast(since: calculatedAt, now: now, language: .english) == "30 seconds ago")
+    }
+
     @Test("single instance guard rejects a second holder")
     func singleInstanceGuardRejectsSecondHolder() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
