@@ -6,6 +6,14 @@ enum CostRangeQueryError: Error {
     case usageUnavailable
 }
 
+enum RunwayRefreshSection: CaseIterable, Hashable {
+    case quota
+    case resetCredits
+    case apiCost
+    case sessionRepair
+    case recentSessions
+}
+
 @MainActor
 final class RunwayModel: ObservableObject {
     struct DetailLine: Identifiable {
@@ -33,7 +41,8 @@ final class RunwayModel: ObservableObject {
     @Published var costScanNote: String?
     @Published var accountDisplay: CodexAccountDisplay
     @Published var lastError: String?
-    @Published var isRefreshing = false
+    @Published private(set) var refreshingSections: Set<RunwayRefreshSection> = []
+    @Published private(set) var isRefreshingAll = false
 
     private let authStore = CodexAuthStore()
     private let quotaClient = QuotaClient()
@@ -67,8 +76,34 @@ final class RunwayModel: ObservableObject {
 
     private var l10n: L10n { settings.l10n }
 
+    var isRefreshing: Bool {
+        isRefreshingAll || !refreshingSections.isEmpty
+    }
+
+    func isRefreshing(_ section: RunwayRefreshSection) -> Bool {
+        refreshingSections.contains(section)
+    }
+
     func refresh() {
         Task { await refreshNow() }
+    }
+
+    func refreshQuota() {
+        guard !isRefreshingAll else { return }
+        Task { await refreshQuotaNow() }
+    }
+
+    func refreshResetCredits() {
+        guard !isRefreshingAll else { return }
+        Task { await refreshResetCreditsNow() }
+    }
+
+    func refreshCost() {
+        guard !isRefreshingAll else { return }
+        Task {
+            await refreshCostNow()
+            exportStatusIfNeeded()
+        }
     }
 
     func tick(now: Date = Date()) {
@@ -85,10 +120,12 @@ final class RunwayModel: ObservableObject {
     }
 
     func refreshSessionReport() {
+        guard !isRefreshingAll else { return }
         Task { await refreshSessionReportNow() }
     }
 
     func refreshRecentSessions() {
+        guard !isRefreshingAll else { return }
         Task {
             await refreshRecentSessionsNow()
             exportStatusIfNeeded()
@@ -96,15 +133,18 @@ final class RunwayModel: ObservableObject {
     }
 
     func repairSessions() {
+        guard !isRefreshingAll else { return }
         Task {
-            do {
-                let service = sessionRepair
-                let report = try await Task.detached { try service.repair() }.value
-                applySessionReport(report)
-                let backup = report.backupPath?.lastPathComponent ?? l10n.text(.noPreviousIndex)
-                sessionText = "\(l10n.text(.rebuilt)) \(report.plannedEntries). \(l10n.text(.backup)): \(backup)"
-            } catch {
-                sessionText = "\(l10n.text(.repairFailed)): \(error.localizedDescription)"
+            await withRefresh([.sessionRepair]) {
+                do {
+                    let service = sessionRepair
+                    let report = try await Task.detached { try service.repair() }.value
+                    applySessionReport(report)
+                    let backup = report.backupPath?.lastPathComponent ?? l10n.text(.noPreviousIndex)
+                    sessionText = "\(l10n.text(.rebuilt)) \(report.plannedEntries). \(l10n.text(.backup)): \(backup)"
+                } catch {
+                    sessionText = "\(l10n.text(.repairFailed)): \(error.localizedDescription)"
+                }
             }
         }
     }
@@ -123,6 +163,12 @@ final class RunwayModel: ObservableObject {
     }
 
     private func refreshSessionReportNow() async {
+        await withRefresh([.sessionRepair]) {
+            await loadSessionReport()
+        }
+    }
+
+    private func loadSessionReport() async {
         do {
             let service = sessionRepair
             let report = try await Task.detached { try service.dryRun() }.value
@@ -149,6 +195,12 @@ final class RunwayModel: ObservableObject {
     }
 
     private func refreshRecentSessionsNow() async {
+        await withRefresh([.recentSessions]) {
+            await loadRecentSessions()
+        }
+    }
+
+    private func loadRecentSessions() async {
         do {
             let scanner = sessionActivityScanner
             let summary = try await Task.detached { try scanner.scan(limit: 5) }.value
@@ -189,27 +241,122 @@ final class RunwayModel: ObservableObject {
         Task.detached { try? exporter.save(snapshot) }
     }
 
+    private func withRefresh(_ sections: Set<RunwayRefreshSection>, operation: () async -> Void) async {
+        guard refreshingSections.isDisjoint(with: sections) else { return }
+        refreshingSections.formUnion(sections)
+        defer { refreshingSections.subtract(sections) }
+        await operation()
+    }
+
     private func refreshNow() async {
-        isRefreshing = true
-        defer { isRefreshing = false }
+        guard !isRefreshingAll, refreshingSections.isEmpty else { return }
+        isRefreshingAll = true
+        defer { isRefreshingAll = false }
+
+        var remoteError: Error?
         do {
             let auth = try await loadValidAuth(preferCached: false)
-            let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
-            latestQuota = quotaSnapshot
-            applyQuota(quotaSnapshot)
-            deliverAlerts(RunwayAlertDecider.quotaAlerts(quotaSnapshot), enabled: settings.preferences.quotaAlertsEnabled)
-            let resetSnapshot = try await quotaClient.fetchResetCredits(auth: auth)
-            latestResetCredits = resetSnapshot
-            applyResetCredits(resetSnapshot)
-            deliverAlerts(RunwayAlertDecider.resetCreditAlerts(resetSnapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
-            await scanCost(quotaSnapshot, auth: auth)
-            await refreshSessionReportNow()
-            await refreshRecentSessionsNow()
-            exportStatusIfNeeded()
-            lastError = nil
+            var quotaSnapshot: QuotaSnapshot?
+            await withRefresh([.quota]) {
+                do {
+                    let snapshot = try await quotaClient.fetchQuota(auth: auth)
+                    quotaSnapshot = snapshot
+                    latestQuota = snapshot
+                    applyQuota(snapshot)
+                    deliverAlerts(RunwayAlertDecider.quotaAlerts(snapshot), enabled: settings.preferences.quotaAlertsEnabled)
+                } catch {
+                    remoteError = error
+                    statusText = l10n.text(.statusError)
+                    quotaText = l10n.text(.statusError)
+                    quotaLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                }
+            }
+            await withRefresh([.resetCredits]) {
+                do {
+                    let resetSnapshot = try await quotaClient.fetchResetCredits(auth: auth)
+                    latestResetCredits = resetSnapshot
+                    applyResetCredits(resetSnapshot)
+                    deliverAlerts(RunwayAlertDecider.resetCreditAlerts(resetSnapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
+                } catch {
+                    remoteError = error
+                    resetCreditsText = l10n.text(.statusError)
+                    resetCreditLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                }
+            }
+            if settings.preferences.showsCostSummary, let quotaSnapshot {
+                await withRefresh([.apiCost]) {
+                    await scanCost(quotaSnapshot, auth: auth)
+                }
+            }
         } catch {
+            remoteError = error
             statusText = l10n.text(.statusError)
-            lastError = error.localizedDescription
+        }
+        if settings.preferences.showsSessionRepairSummary {
+            await refreshSessionReportNow()
+        }
+        if settings.preferences.showsRecentSessions {
+            await refreshRecentSessionsNow()
+        }
+        exportStatusIfNeeded()
+        lastError = remoteError?.localizedDescription
+    }
+
+    private func refreshQuotaNow() async {
+        await withRefresh([.quota]) {
+            do {
+                let auth = try await loadValidAuth(preferCached: false)
+                let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
+                latestQuota = quotaSnapshot
+                applyQuota(quotaSnapshot)
+                deliverAlerts(RunwayAlertDecider.quotaAlerts(quotaSnapshot), enabled: settings.preferences.quotaAlertsEnabled)
+                lastError = nil
+                exportStatusIfNeeded()
+            } catch {
+                statusText = l10n.text(.statusError)
+                quotaText = l10n.text(.statusError)
+                quotaLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func refreshResetCreditsNow() async {
+        await withRefresh([.resetCredits]) {
+            do {
+                let auth = try await loadValidAuth(preferCached: true)
+                let snapshot = try await quotaClient.fetchResetCredits(auth: auth)
+                latestResetCredits = snapshot
+                applyResetCredits(snapshot)
+                deliverAlerts(RunwayAlertDecider.resetCreditAlerts(snapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
+                lastError = nil
+                exportStatusIfNeeded()
+            } catch {
+                resetCreditsText = l10n.text(.statusError)
+                resetCreditLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func refreshCostNow() async {
+        await withRefresh([.apiCost]) {
+            do {
+                let auth = try await loadValidAuth(preferCached: true)
+                let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
+                latestQuota = quotaSnapshot
+                applyQuota(quotaSnapshot)
+                await scanCost(quotaSnapshot, auth: auth)
+                lastError = nil
+            } catch {
+                if latestCost != nil {
+                    noteCostScanFailure(error.localizedDescription)
+                } else {
+                    clearCost(l10n.text(.usageAnalyticsUnavailable))
+                    costLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                }
+                lastError = error.localizedDescription
+            }
         }
     }
 

@@ -221,7 +221,7 @@ struct JSONLineRecord {
         let turnContext = object["turn_context"] as? [String: Any]
         let contextModel = object["type"] as? String == "turn_context" ? payload?["model"] as? String : nil
         let model = turnContext?["model"] as? String ?? payload?["model"] as? String
-        let sessionCWD = object["type"] as? String == "session_meta" ? payload?["cwd"] as? String : nil
+        let sessionCWD = payload?["cwd"] as? String
         return JSONLineRecord(
             timestamp: timestamp,
             model: model,

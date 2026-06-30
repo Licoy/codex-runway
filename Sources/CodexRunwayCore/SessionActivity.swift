@@ -67,24 +67,19 @@ public struct SessionActivityScanner: Sendable {
     public func scan(limit: Int = 5) throws -> SessionActivitySummary {
         let limit = max(0, limit)
         guard limit > 0 else { return SessionActivitySummary(items: []) }
-        let files = jsonlFiles()
-        let indexRows = try readIndex().sorted { $0.updatedAt > $1.updatedAt }
-        if !indexRows.isEmpty {
-            let filesByID = filesBySessionID(files)
-            var items: [SessionActivityItem] = []
-            for row in indexRows {
-                guard let file = filesByID[row.id] else { continue }
-                if let item = try parseSession(file, title: row.threadName, updatedAt: row.updatedAt) {
-                    items.append(item)
-                }
-                if items.count == limit { break }
+        let titlesByID = Dictionary(try readIndex().map { ($0.id, $0.threadName) }, uniquingKeysWith: { _, new in new })
+        var latestByID: [String: SessionActivityItem] = [:]
+        for file in jsonlFiles() {
+            guard var item = try parseSession(file) else { continue }
+            if let title = titlesByID[item.id].flatMap(cleanSessionTitle) {
+                item.title = title
             }
-            return SessionActivitySummary(items: items)
+            if let existing = latestByID[item.id], existing.updatedAt >= item.updatedAt { continue }
+            latestByID[item.id] = item
         }
-        let items = try files
-            .sorted { modificationDate($0) > modificationDate($1) }
+        let items = latestByID.values
+            .sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }
             .prefix(limit)
-            .compactMap { try parseSession($0) }
         return SessionActivitySummary(items: Array(items))
     }
 
@@ -151,27 +146,6 @@ public struct SessionActivityScanner: Sendable {
         return try String(contentsOf: url).split(separator: "\n").compactMap { line in
             try? JSONDecoder().decode(SessionIndexEntry.self, from: Data(line.utf8))
         }
-    }
-
-    private func filesBySessionID(_ files: [URL]) -> [String: URL] {
-        var result: [String: URL] = [:]
-        for file in files {
-            guard let id = sessionID(from: file) else { continue }
-            if let existing = result[id], modificationDate(existing) > modificationDate(file) { continue }
-            result[id] = file
-        }
-        return result
-    }
-
-    private func sessionID(from file: URL) -> String? {
-        let name = file.deletingPathExtension().lastPathComponent
-        let pattern = #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#
-        guard let range = name.range(of: pattern, options: .regularExpression) else { return nil }
-        return String(name[range])
-    }
-
-    private func modificationDate(_ file: URL) -> Date {
-        (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
     private func estimatedCost(_ byModel: [String: ApiEquivalentTotals]) -> Decimal? {

@@ -50,6 +50,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
     public var statusBarBatteryDetailStyle: StatusBarBatteryDetailStyle
     public var refreshIntervalSeconds: Int
     public var showsCostSummary: Bool
+    public var showsRecentSessions: Bool
     public var showsSessionRepairSummary: Bool
     public var automaticallyChecksForUpdates: Bool
     public var quotaAlertsEnabled: Bool
@@ -65,6 +66,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         statusBarBatteryDetailStyle: StatusBarBatteryDetailStyle = .countdown,
         refreshIntervalSeconds: Int = 300,
         showsCostSummary: Bool = true,
+        showsRecentSessions: Bool = false,
         showsSessionRepairSummary: Bool = true,
         automaticallyChecksForUpdates: Bool = true,
         quotaAlertsEnabled: Bool = false,
@@ -79,6 +81,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         self.statusBarBatteryDetailStyle = statusBarBatteryDetailStyle
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.showsCostSummary = showsCostSummary
+        self.showsRecentSessions = showsRecentSessions
         self.showsSessionRepairSummary = showsSessionRepairSummary
         self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
         self.quotaAlertsEnabled = quotaAlertsEnabled
@@ -95,6 +98,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         case statusBarBatteryDetailStyle
         case refreshIntervalSeconds
         case showsCostSummary
+        case showsRecentSessions
         case showsSessionRepairSummary
         case automaticallyChecksForUpdates
         case quotaAlertsEnabled
@@ -112,6 +116,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         statusBarBatteryDetailStyle = try container.decodeIfPresent(StatusBarBatteryDetailStyle.self, forKey: .statusBarBatteryDetailStyle) ?? .countdown
         refreshIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .refreshIntervalSeconds) ?? 300
         showsCostSummary = try container.decodeIfPresent(Bool.self, forKey: .showsCostSummary) ?? true
+        showsRecentSessions = try container.decodeIfPresent(Bool.self, forKey: .showsRecentSessions) ?? false
         showsSessionRepairSummary = try container.decodeIfPresent(Bool.self, forKey: .showsSessionRepairSummary) ?? true
         automaticallyChecksForUpdates = try container.decodeIfPresent(Bool.self, forKey: .automaticallyChecksForUpdates) ?? true
         quotaAlertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .quotaAlertsEnabled) ?? false

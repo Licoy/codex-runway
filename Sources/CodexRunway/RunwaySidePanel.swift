@@ -264,26 +264,3 @@ private struct StatusPill: View {
         }
     }
 }
-
-struct SummaryRow: View {
-    var systemImage: String
-    var title: String
-    var value: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                Text(value)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            Spacer(minLength: 0)
-        }
-    }
-}

@@ -56,6 +56,7 @@ struct PreferencesTests {
             statusBarBatteryDetailStyle: .remainingPercent,
             refreshIntervalSeconds: 120,
             showsCostSummary: false,
+            showsRecentSessions: true,
             showsSessionRepairSummary: false,
             automaticallyChecksForUpdates: false,
             quotaAlertsEnabled: true,
@@ -70,6 +71,7 @@ struct PreferencesTests {
         #expect(store.load().statusBarBatteryDetailStyle == .remainingPercent)
         #expect(store.load().refreshIntervalSeconds == 120)
         #expect(store.load().showsCostSummary == false)
+        #expect(store.load().showsRecentSessions)
         #expect(store.load().showsSessionRepairSummary == false)
         #expect(store.load().automaticallyChecksForUpdates == false)
         #expect(store.load().quotaAlertsEnabled)
@@ -95,6 +97,8 @@ struct PreferencesTests {
         #expect(preferences.statusBarMetersDetailStyle == .remainingPercent)
         #expect(preferences.statusBarBatteryScope == .fiveHour)
         #expect(preferences.statusBarBatteryDetailStyle == .countdown)
+        #expect(preferences.showsCostSummary)
+        #expect(preferences.showsRecentSessions == false)
         #expect(preferences.automaticallyChecksForUpdates)
         #expect(preferences.quotaAlertsEnabled == false)
         #expect(preferences.resetCreditAlertsEnabled == false)

@@ -111,10 +111,12 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case quota
     case quotaAlertBody
     case quotaAlertTitle
+    case quotaAlertsDescription
     case quotaAlerts
     case quit
     case rawAnalyticsCredits
     case recent
+    case recentSessionsDescription
     case refresh
     case refreshInterval
     case rebuilt
@@ -127,6 +129,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case resetCredits
     case resetCreditAlertBody
     case resetCreditAlertTitle
+    case resetCreditAlertsDescription
     case resetCreditAlerts
     case resetCreditDetails
     case runway
@@ -138,6 +141,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case selfCheck
     case showDetails
     case showCostSummary
+    case showRecentSessions
     case showSessionRepairSummary
     case sourceLocalSessions
     case sourceOnlineSupplement

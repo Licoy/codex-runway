@@ -5,13 +5,19 @@ struct QuotaMetersView: View {
     var title: String
     var meters: [QuotaMeter]
     var l10n: L10n
+    var isRefreshing: Bool
+    var onRefresh: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: "speedometer")
-                .font(.headline)
+            RefreshableSectionHeader(
+                title: title,
+                systemImage: "speedometer",
+                l10n: l10n,
+                isRefreshing: isRefreshing,
+                onRefresh: onRefresh)
             if meters.isEmpty {
-                Text(l10n.text(.notLoaded)).foregroundStyle(.secondary)
+                Text(l10n.text(isRefreshing ? .calculating : .notLoaded)).foregroundStyle(.secondary)
             } else {
                 ForEach(meters) { meter in
                     quotaRow(meter)
@@ -96,13 +102,19 @@ struct RunwayProgressBar: View {
 struct RecentSessionsView: View {
     var sessions: [SessionActivityItem]
     var l10n: L10n
+    var isRefreshing: Bool
+    var onRefresh: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(l10n.text(.recentSessions), systemImage: "terminal")
-                .font(.headline)
+            RefreshableSectionHeader(
+                title: l10n.text(.recentSessions),
+                systemImage: "terminal",
+                l10n: l10n,
+                isRefreshing: isRefreshing,
+                onRefresh: onRefresh)
             if sessions.isEmpty {
-                Text(l10n.text(.notLoaded)).foregroundStyle(.secondary)
+                Text(l10n.text(isRefreshing ? .calculating : .notLoaded)).foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 0) {
                     ForEach(sessions.prefix(5)) { session in
@@ -172,12 +184,18 @@ struct RecentSessionsView: View {
 struct ResetCreditsSummaryView: View {
     var summary: ResetCreditSummary?
     var l10n: L10n
+    var isRefreshing: Bool
+    var onRefresh: () -> Void
     var onDetailsSelect: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(l10n.text(.resetCredits), systemImage: "clock.arrow.circlepath")
-                .font(.headline)
+            RefreshableSectionHeader(
+                title: l10n.text(.resetCredits),
+                systemImage: "clock.arrow.circlepath",
+                l10n: l10n,
+                isRefreshing: isRefreshing,
+                onRefresh: onRefresh)
             if let summary {
                 Text("\(summary.availableCount) \(l10n.text(.available)) / \(summary.totalCount) \(l10n.text(.total))")
                     .font(.title3)
@@ -194,7 +212,7 @@ struct ResetCreditsSummaryView: View {
                     title: "\(summary.availableCount) \(l10n.text(.availableResets))",
                     action: onDetailsSelect)
             } else {
-                Text(l10n.text(.notLoaded)).foregroundStyle(.secondary)
+                Text(l10n.text(isRefreshing ? .calculating : .notLoaded)).foregroundStyle(.secondary)
             }
         }
     }
@@ -208,31 +226,62 @@ struct CostSummaryView: View {
     var text: String
     var subtitle: String
     var l10n: L10n
+    var isRefreshing: Bool
+    var onRefresh: () -> Void
     var onDetailsSelect: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "dollarsign.circle")
+            RefreshableSectionHeader(
+                title: l10n.text(.apiCost),
+                systemImage: "dollarsign.circle",
+                l10n: l10n,
+                isRefreshing: isRefreshing,
+                onRefresh: onRefresh)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(isRefreshing && subtitle.isEmpty ? l10n.text(.calculating) : text)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(l10n.text(.apiCost))
-                        .font(.headline)
-                    Text(text)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                         .textSelection(.enabled)
-                    if !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .textSelection(.enabled)
-                    }
                 }
-                Spacer(minLength: 0)
             }
             SidePanelDisclosureRow(title: l10n.text(.showDetails), action: onDetailsSelect)
+        }
+    }
+}
+
+struct RefreshableSectionHeader: View {
+    var title: String
+    var systemImage: String
+    var l10n: L10n
+    var isRefreshing: Bool
+    var onRefresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+            Spacer(minLength: 0)
+            Button(action: onRefresh) {
+                Group {
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .disabled(isRefreshing)
+            .help(l10n.text(.refresh))
+            .accessibilityLabel(l10n.text(.refresh))
         }
     }
 }

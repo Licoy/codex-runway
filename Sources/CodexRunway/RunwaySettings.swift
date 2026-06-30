@@ -61,6 +61,10 @@ final class RunwaySettings: ObservableObject {
         update { $0.showsCostSummary = isShown }
     }
 
+    func updateShowsRecentSessions(_ isShown: Bool) {
+        update { $0.showsRecentSessions = isShown }
+    }
+
     func updateShowsSessionRepairSummary(_ isShown: Bool) {
         update { $0.showsSessionRepairSummary = isShown }
     }

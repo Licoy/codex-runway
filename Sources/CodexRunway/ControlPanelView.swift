@@ -122,16 +122,20 @@ struct ControlPanelView: View {
                     subtitle: l10n.text(.apiEquivalent),
                     binding: costSummaryBinding)
                 PreferenceToggleRow(
+                    title: l10n.text(.showRecentSessions),
+                    subtitle: l10n.text(.recentSessionsDescription),
+                    binding: recentSessionsBinding)
+                PreferenceToggleRow(
                     title: l10n.text(.showSessionRepairSummary),
                     subtitle: l10n.text(.sessionRepair),
                     binding: repairSummaryBinding)
                 PreferenceToggleRow(
                     title: l10n.text(.quotaAlerts),
-                    subtitle: l10n.text(.quota),
+                    subtitle: l10n.text(.quotaAlertsDescription),
                     binding: quotaAlertsBinding)
                 PreferenceToggleRow(
                     title: l10n.text(.resetCreditAlerts),
-                    subtitle: l10n.text(.resetCredits),
+                    subtitle: l10n.text(.resetCreditAlertsDescription),
                     binding: resetCreditAlertsBinding)
             }
         }
@@ -224,6 +228,10 @@ struct ControlPanelView: View {
 
     private var costSummaryBinding: Binding<Bool> {
         Binding(get: { settings.preferences.showsCostSummary }, set: { settings.updateShowsCostSummary($0) })
+    }
+
+    private var recentSessionsBinding: Binding<Bool> {
+        Binding(get: { settings.preferences.showsRecentSessions }, set: { settings.updateShowsRecentSessions($0) })
     }
 
     private var repairSummaryBinding: Binding<Bool> {

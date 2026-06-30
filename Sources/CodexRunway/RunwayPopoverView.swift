@@ -41,22 +41,37 @@ struct RunwayPopoverView: View {
     private var mainContent: some View {
         PolishedScrollView(verticalPadding: 4) {
             VStack(alignment: .leading, spacing: 14) {
-                QuotaMetersView(title: l10n.text(.quota), meters: model.quotaMeters, l10n: l10n)
+                QuotaMetersView(
+                    title: l10n.text(.quota),
+                    meters: model.quotaMeters,
+                    l10n: l10n,
+                    isRefreshing: model.isRefreshing(.quota),
+                    onRefresh: { model.refreshQuota() })
                 ResetCreditsSummaryView(
                     summary: model.resetCreditSummary,
                     l10n: l10n,
+                    isRefreshing: model.isRefreshing(.resetCredits),
+                    onRefresh: { model.refreshResetCredits() },
                     onDetailsSelect: { detailPage = .resetCredits })
                 if settings.preferences.showsCostSummary {
                     CostSummaryView(
                         text: model.costText,
                         subtitle: model.costSubtitle,
                         l10n: l10n,
-                    onDetailsSelect: { detailPage = .apiCost })
+                        isRefreshing: model.isRefreshing(.apiCost),
+                        onRefresh: { model.refreshCost() },
+                        onDetailsSelect: { detailPage = .apiCost })
                 }
                 if settings.preferences.showsSessionRepairSummary {
                     sessionSummary
                 }
-                RecentSessionsView(sessions: model.recentSessions, l10n: l10n)
+                if settings.preferences.showsRecentSessions {
+                    RecentSessionsView(
+                        sessions: model.recentSessions,
+                        l10n: l10n,
+                        isRefreshing: model.isRefreshing(.recentSessions),
+                        onRefresh: { model.refreshRecentSessions() })
+                }
             }
         }
     }
@@ -85,7 +100,7 @@ struct RunwayPopoverView: View {
                 HeaderActionButton(title: l10n.text(.refresh)) {
                     model.refresh()
                 } icon: {
-                    Image(systemName: model.isRefreshing ? "hourglass" : "arrow.clockwise")
+                    Image(systemName: model.isRefreshingAll ? "hourglass" : "arrow.clockwise")
                 }
             }
         }
@@ -130,7 +145,16 @@ struct RunwayPopoverView: View {
 
     private var sessionSummary: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SummaryRow(systemImage: "wrench.and.screwdriver", title: l10n.text(.sessionRepair), value: model.sessionText)
+            RefreshableSectionHeader(
+                title: l10n.text(.sessionRepair),
+                systemImage: "wrench.and.screwdriver",
+                l10n: l10n,
+                isRefreshing: model.isRefreshing(.sessionRepair),
+                onRefresh: { model.refreshSessionReport() })
+            Text(model.isRefreshing(.sessionRepair) && model.sessionLines.isEmpty ? l10n.text(.calculating) : model.sessionText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
             Button { confirmRepair = true } label: {
                 HStack {
                     Label(l10n.text(.repairIndex), systemImage: "cross.case")

@@ -137,6 +137,29 @@ struct CostScannerTests {
         #expect(summary.projectRows.map(\.name) == ["codex-runway"])
     }
 
+    @Test("turn context cwd groups API equivalent projects")
+    func turnContextCWDGroupsProjects() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try """
+        {"timestamp":"2026-06-29T00:00:00Z","type":"turn_context","payload":{"cwd":"/Users/me/dev/codex-runway","model":"gpt-5.5"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":0}}}}
+        """.write(to: sessionDir.appending(path: "rollout-codex-runway.jsonl"), atomically: true, encoding: .utf8)
+        try """
+        {"timestamp":"2026-06-29T00:02:00Z","type":"turn_context","payload":{"cwd":"/Users/me/dev/aqbot","model":"gpt-5.5"}}
+        {"timestamp":"2026-06-29T00:03:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0}}}}
+        """.write(to: sessionDir.appending(path: "rollout-aqbot.jsonl"), atomically: true, encoding: .utf8)
+
+        let summary = try UsageCostScanner(codexHome: root.url).scanAPIEquivalent(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(summary.projectRows.map(\.name) == ["codex-runway", "aqbot"])
+        #expect(summary.projectRows.map(\.totals.totalTokens) == [1_020, 510])
+    }
+
     @Test("session activity scanner summarizes recent Codex sessions")
     func sessionActivitySummarizesRecentSessions() throws {
         let root = try TemporaryDirectory()
@@ -163,8 +186,8 @@ struct CostScannerTests {
         #expect(session.estimatedUSD ?? 0 > 0)
     }
 
-    @Test("session activity scanner follows session index updated order")
-    func sessionActivityFollowsIndexOrder() throws {
+    @Test("session activity scanner uses index titles but sorts by file activity")
+    func sessionActivityUsesIndexTitlesButSortsByFileActivity() throws {
         let root = try TemporaryDirectory()
         let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
@@ -181,12 +204,12 @@ struct CostScannerTests {
 
         let summary = try SessionActivityScanner(codexHome: root.url).scan(limit: 2)
 
-        #expect(summary.items.map(\.id) == [firstID, secondID])
-        #expect(summary.items.map(\.title) == ["Index newest", "File newest"])
+        #expect(summary.items.map(\.id) == [secondID, firstID])
+        #expect(summary.items.map(\.title) == ["File newest", "Index newest"])
     }
 
-    @Test("session activity scanner ignores unindexed history when index exists")
-    func sessionActivityIgnoresUnindexedHistory() throws {
+    @Test("session activity scanner includes newer unindexed sessions")
+    func sessionActivityIncludesNewerUnindexedSessions() throws {
         let root = try TemporaryDirectory()
         let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
@@ -202,8 +225,8 @@ struct CostScannerTests {
 
         let summary = try SessionActivityScanner(codexHome: root.url).scan(limit: 5)
 
-        #expect(summary.items.map(\.id) == [indexedID])
-        #expect(summary.items.first?.title == "Indexed session")
+        #expect(summary.items.map(\.id) == [unindexedID, indexedID])
+        #expect(summary.items.map(\.title) == ["Unindexed newer file", "Indexed session"])
     }
 
     @Test("session activity scanner falls back to recent files without index")
