@@ -53,7 +53,7 @@ struct RunwayProgressBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
+                Capsule().fill(RunwaySurface.subtleFill)
                 Capsule()
                     .fill(color)
                     .frame(width: max(6, proxy.size.width * CGFloat(meter.remainingPercent) / 100))

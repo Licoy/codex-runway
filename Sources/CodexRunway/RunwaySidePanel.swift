@@ -22,8 +22,8 @@ struct SidePanelDisclosureRow: View {
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .background(RunwaySurface.fill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+            .contentShape(RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
         }
         .buttonStyle(.plain)
     }
@@ -108,7 +108,7 @@ private struct ResetCreditsDetailView: View {
                         ResetCreditTableRow(credit: credit, l10n: l10n)
                     }
                 }
-                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                .background(RunwaySurface.subtleFill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
             }
         }
     }
@@ -145,7 +145,7 @@ private struct ResetMetricCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .background(RunwaySurface.fill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
     }
 }
 

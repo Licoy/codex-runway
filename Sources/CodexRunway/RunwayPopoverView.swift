@@ -27,6 +27,7 @@ struct RunwayPopoverView: View {
         }
         .padding(16)
         .frame(width: 390, height: 560, alignment: .topLeading)
+        .preferredColorScheme(settings.colorScheme)
         .alert(l10n.text(.repairConfirmTitle), isPresented: $confirmRepair) {
             Button(l10n.text(.repair), role: .destructive) { model.repairSessions() }
             Button(l10n.text(.cancel), role: .cancel) {}
@@ -120,9 +121,16 @@ struct RunwayPopoverView: View {
         VStack(alignment: .leading, spacing: 8) {
             SummaryRow(systemImage: "wrench.and.screwdriver", title: l10n.text(.sessionRepair), value: model.sessionText)
             Button { confirmRepair = true } label: {
-                Label(l10n.text(.repairIndex), systemImage: "cross.case")
+                HStack {
+                    Label(l10n.text(.repairIndex), systemImage: "cross.case")
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(RunwaySurface.fill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+                .contentShape(RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
         }
     }
 

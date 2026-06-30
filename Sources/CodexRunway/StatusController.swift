@@ -155,6 +155,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         if !popover.isShown {
             showDetailsWindow()
         }
+        applyAppearance()
         startPopoverCloseMonitors()
         model.refreshSessionReport()
     }
@@ -214,6 +215,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(rootView: popoverView())
         detailsWindow = window
+        applyAppearance()
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)

@@ -74,7 +74,7 @@ struct ApiCostDetailView: View {
                         UsageTableRow(row: row)
                     }
                 }
-                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                .background(RunwaySurface.subtleFill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
             }
         }
     }
@@ -90,7 +90,7 @@ struct ApiCostDetailView: View {
                         BreakdownRow(row: row)
                     }
                 }
-                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                .background(RunwaySurface.subtleFill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
             }
         }
     }
@@ -142,7 +142,7 @@ private struct UsageStatCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .background(RunwaySurface.fill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
     }
 }
 
