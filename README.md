@@ -4,7 +4,7 @@
 
 # Codex Runway
 
-中文 | [English](ENGLISH.md)
+中文 | [English](./README_EN.md)
 
 你的 Codex 还可以跑多久？
 
@@ -27,6 +27,8 @@ Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏里随时
   <img src="docs/images/1.png" alt="Codex Runway 配额概览" width="260">
   <img src="docs/images/2.png" alt="Codex Runway 重置次数详情" width="260">
   <img src="docs/images/3.png" alt="Codex Runway API 等价成本" width="260">
+  <img src="docs/images/4.png" alt="Codex Runway 设置页面" width="260">
+  <img src="docs/images/5.png" alt="Codex Runway 最近会话" width="260">
 </p>
 
 ## 安装
