@@ -8,18 +8,19 @@
 
 How much longer can your Codex keep running?
 
-Codex Runway is a native macOS menu bar app that keeps Codex quota, reset credits, usage cost, and local session health visible at a glance. It is built for people who use Codex heavily and want fewer quota surprises during long work sessions.
+Codex Runway is a native macOS menu bar app for checking Codex quota, reset credits, API-equivalent cost, local sessions, and update status.
 
 ## Highlights
 
-- See remaining Codex runway directly in the menu bar.
-- Track 5-hour, weekly, and additional quota pressure before it blocks work.
-- Identify the active Codex account and subscription tier to avoid account confusion.
-- Monitor reset credits and expiry risk so available resets are not wasted.
-- Estimate API-equivalent cost for the current cycle to understand usage intensity.
-- Repair local session index consistency when Codex session lists drift.
-- Native macOS menu bar experience with light, dark, system appearance, Chinese, and English.
-- Built-in update checks keep the app current.
+- Check remaining Codex quota from the menu bar.
+- View 5-hour, weekly, and additional quota windows.
+- Show the current Codex account and subscription tier.
+- View reset credit count, status, and expiration time.
+- View current-cycle API-equivalent cost and token usage.
+- View recent Codex sessions, projects, status, and usage summaries.
+- Repair the local session index.
+- Support light, dark, system appearance, Chinese, and English.
+- Support built-in update checks.
 
 ## Screenshots
 
