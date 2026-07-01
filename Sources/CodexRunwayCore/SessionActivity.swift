@@ -59,6 +59,9 @@ public struct SessionActivitySummary: Codable, Sendable, Equatable {
 
 public struct SessionActivityScanner: Sendable {
     public var codexHome: URL
+    private static let headProbeBytes = 512 * 1024
+    private static let tailProbeBytes = 64 * 1024
+    private static let smallFullScanBytes = 256 * 1024
 
     public init(codexHome: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")) {
         self.codexHome = codexHome
@@ -67,9 +70,10 @@ public struct SessionActivityScanner: Sendable {
     public func scan(limit: Int = 5) throws -> SessionActivitySummary {
         let limit = max(0, limit)
         guard limit > 0 else { return SessionActivitySummary(items: []) }
-        let titlesByID = Dictionary(try readIndex().map { ($0.id, $0.threadName) }, uniquingKeysWith: { _, new in new })
+        let index = try readIndex()
+        let titlesByID = Dictionary(index.map { ($0.id, $0.threadName) }, uniquingKeysWith: { _, new in new })
         var latestByID: [String: SessionActivityItem] = [:]
-        for file in jsonlFiles() {
+        for file in candidateFiles(index: index, limit: max(limit * 3, 15)) {
             guard var item = try parseSession(file) else { continue }
             if let title = titlesByID[item.id].flatMap(cleanSessionTitle) {
                 item.title = title
@@ -83,67 +87,131 @@ public struct SessionActivityScanner: Sendable {
         return SessionActivitySummary(items: Array(items))
     }
 
+    private func candidateFiles(index: [SessionIndexEntry], limit: Int) -> [URL] {
+        let files = jsonlFileCandidates()
+        let filesByID = Dictionary(files.compactMap { file in
+            file.id.map { ($0, file) }
+        }, uniquingKeysWith: { existing, new in
+            existing.activityDate >= new.activityDate ? existing : new
+        })
+        var result: [URL] = []
+        var seen = Set<String>()
+        func append(_ file: SessionFileCandidate) {
+            guard seen.insert(file.url.path).inserted else { return }
+            result.append(file.url)
+        }
+
+        files.sorted(by: isNewerCandidate).prefix(limit).forEach(append)
+        index.sorted { $0.updatedAt > $1.updatedAt }.prefix(limit).forEach { entry in
+            if let file = filesByID[entry.id] { append(file) }
+        }
+        return result
+    }
+
     private func parseSession(
         _ file: URL,
         title providedTitle: String? = nil,
         updatedAt providedUpdatedAt: Date? = nil)
         throws -> SessionActivityItem?
     {
-        let text = try String(contentsOf: file)
-        var id: String?
-        var cwd: String?
-        var title = providedTitle.flatMap(cleanSessionTitle)
-        var updatedAt = providedUpdatedAt
-        var state = SessionActivityState.recent
-        var currentModel = "unknown-model"
-        var byModel: [String: ApiEquivalentTotals] = [:]
-        for line in text.split(separator: "\n").map(String.init) {
-            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
-            let payload = object["payload"] as? [String: Any]
-            if let stamp = object["timestamp"] as? String, let date = RunwayDates.parse(stamp) {
-                updatedAt = max(updatedAt ?? date, date)
-            }
-            if object["type"] as? String == "session_meta" {
-                id = id ?? payload?["id"] as? String ?? payload?["session_id"] as? String
-                cwd = cwd ?? payload?["cwd"] as? String
-            }
-            if title == nil, payload?["type"] as? String == "message", payload?["role"] as? String == "user" {
-                title = sessionText(payload?["content"]).flatMap(cleanSessionTitle)
-            }
-            state = stronger(state, detectedState(object: object, payload: payload))
-            guard let record = try? JSONLineRecord.parse(line) else { continue }
-            if let contextModel = record.contextModel { currentModel = contextModel }
-            guard let usage = record.lastTokenUsage else { continue }
-            let model = record.model ?? currentModel
-            byModel[model, default: .zero] = byModel[model, default: .zero] + ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
+        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
+        var state = SessionParseState(title: providedTitle.flatMap(cleanSessionTitle), updatedAt: providedUpdatedAt)
+        for line in try probeLines(file, size: size) {
+            applySessionLine(line, to: &state, includesLastUsage: false)
         }
-        guard let id, let updatedAt else { return nil }
-        let totals = byModel.values.reduce(.zero, +)
+        if state.byModel.isEmpty, size <= Self.smallFullScanBytes {
+            state.byModel = [:]
+            for line in try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map(String.init) {
+                applySessionLine(line, to: &state, includesLastUsage: true)
+            }
+        }
+        guard let id = state.id, let updatedAt = state.updatedAt else { return nil }
+        let totals = state.byModel.values.reduce(.zero, +)
         return SessionActivityItem(
             id: id,
-            title: title ?? "Untitled",
-            projectName: SessionProjectName.displayName(for: cwd),
-            cwd: cwd,
+            title: state.title ?? "Untitled",
+            projectName: SessionProjectName.displayName(for: state.cwd),
+            cwd: state.cwd,
             updatedAt: updatedAt,
-            state: state,
+            state: state.activityState,
             totals: totals,
-            estimatedUSD: estimatedCost(byModel))
+            estimatedUSD: estimatedCost(state.byModel))
     }
 
-    private func jsonlFiles() -> [URL] {
+    private func probeLines(_ file: URL, size: Int) throws -> [String] {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        let end = try handle.seekToEnd()
+        if size <= Self.headProbeBytes + Self.tailProbeBytes {
+            try handle.seek(toOffset: 0)
+            return lines(try handle.readToEnd() ?? Data())
+        }
+
+        try handle.seek(toOffset: 0)
+        let head = try handle.read(upToCount: Self.headProbeBytes) ?? Data()
+        let tailStart = end > UInt64(Self.tailProbeBytes) ? end - UInt64(Self.tailProbeBytes) : 0
+        try handle.seek(toOffset: tailStart)
+        let tail = try handle.readToEnd() ?? Data()
+        let tailLines = lines(tail).dropFirst(tailStart > 0 ? 1 : 0)
+        return lines(head) + tailLines
+    }
+
+    private func lines(_ data: Data) -> [String] {
+        String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+    }
+
+    private func applySessionLine(_ line: String, to state: inout SessionParseState, includesLastUsage: Bool) {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
+        let payload = object["payload"] as? [String: Any]
+        if let stamp = object["timestamp"] as? String, let date = RunwayDates.parse(stamp) {
+            state.updatedAt = max(state.updatedAt ?? date, date)
+        }
+        if object["type"] as? String == "session_meta" {
+            state.id = state.id ?? payload?["id"] as? String ?? payload?["session_id"] as? String
+            state.cwd = state.cwd ?? payload?["cwd"] as? String
+        }
+        if state.title == nil, payload?["type"] as? String == "message", payload?["role"] as? String == "user" {
+            state.title = sessionText(payload?["content"]).flatMap(cleanSessionTitle)
+        }
+        state.activityState = stronger(state.activityState, detectedState(object: object, payload: payload))
+        if object["type"] as? String == "turn_context", let model = payload?["model"] as? String {
+            state.currentModel = model
+        }
+        let turnContext = object["turn_context"] as? [String: Any]
+        let model = turnContext?["model"] as? String ?? payload?["model"] as? String ?? state.currentModel
+        if let usage = tokenUsage(from: payload, key: "total_token_usage") {
+            state.byModel[model] = ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
+        } else if includesLastUsage, let usage = tokenUsage(from: payload, key: "last_token_usage") {
+            state.byModel[model, default: .zero] = state.byModel[model, default: .zero] + ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
+        }
+    }
+
+    private func jsonlFileCandidates() -> [SessionFileCandidate] {
         ["sessions", "archived_sessions"].flatMap { folder in
             let root = codexHome.appendingPathComponent(folder, isDirectory: true)
             guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
-                return [URL]()
+                return [SessionFileCandidate]()
             }
-            return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "jsonl" }
+            return enumerator.compactMap { item -> SessionFileCandidate? in
+                guard let url = item as? URL, url.pathExtension == "jsonl" else { return nil }
+                return SessionFileCandidate(
+                    url: url,
+                    id: sessionID(from: url),
+                    activityDate: fileActivityDate(url))
+            }
         }
+    }
+
+    private func fileActivityDate(_ file: URL) -> Date {
+        (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            ?? dayFromPath(file)
+            ?? .distantPast
     }
 
     private func readIndex() throws -> [SessionIndexEntry] {
         let url = codexHome.appendingPathComponent("session_index.jsonl")
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        return try String(contentsOf: url).split(separator: "\n").compactMap { line in
+        return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").compactMap { line in
             try? JSONDecoder().decode(SessionIndexEntry.self, from: Data(line.utf8))
         }
     }
@@ -154,6 +222,57 @@ public struct SessionActivityScanner: Sendable {
             result + (PricingTable.cost(model: item.key, totals: item.value) ?? PricingTable.equivalentCost(totals: item.value))
         }
     }
+}
+
+private struct SessionFileCandidate {
+    var url: URL
+    var id: String?
+    var activityDate: Date
+}
+
+private struct SessionParseState {
+    var id: String?
+    var cwd: String?
+    var title: String?
+    var updatedAt: Date?
+    var activityState = SessionActivityState.recent
+    var currentModel = "unknown-model"
+    var byModel: [String: ApiEquivalentTotals] = [:]
+}
+
+private func isNewerCandidate(_ lhs: SessionFileCandidate, _ rhs: SessionFileCandidate) -> Bool {
+    lhs.activityDate == rhs.activityDate ? lhs.url.path < rhs.url.path : lhs.activityDate > rhs.activityDate
+}
+
+private func sessionID(from file: URL) -> String? {
+    let name = file.deletingPathExtension().lastPathComponent
+    guard name.hasPrefix("rollout-") else { return nil }
+    let raw = String(name.dropFirst("rollout-".count))
+    let id = raw.count > 36 ? String(raw.suffix(36)) : raw
+    return id.isEmpty ? nil : id
+}
+
+private func tokenUsage(from payload: [String: Any]?, key: String) -> TokenUsage? {
+    guard let info = payload?["info"] as? [String: Any],
+          let usage = info[key] as? [String: Any]
+    else { return nil }
+    let input = usage["input_tokens"] as? Int ?? 0
+    let cached = usage["cached_input_tokens"] as? Int ?? 0
+    let output = (usage["output_tokens"] as? Int ?? 0) + (usage["reasoning_output_tokens"] as? Int ?? 0)
+    return TokenUsage(inputTokens: input, cachedInputTokens: cached, outputTokens: output)
+}
+
+private func dayFromPath(_ file: URL) -> Date? {
+    let components = file.pathComponents
+    for index in 0..<(max(0, components.count - 2)) {
+        guard components[index].count == 4,
+              let year = Int(components[index]),
+              let month = Int(components[index + 1]),
+              let day = Int(components[index + 2])
+        else { continue }
+        return Calendar(identifier: .gregorian).date(from: DateComponents(year: year, month: month, day: day))
+    }
+    return nil
 }
 
 private func detectedState(object: [String: Any], payload: [String: Any]?) -> SessionActivityState {

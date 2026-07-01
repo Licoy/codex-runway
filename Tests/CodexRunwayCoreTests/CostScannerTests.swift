@@ -255,6 +255,104 @@ struct CostScannerTests {
         #expect(summary.items.first?.title == "New fallback")
     }
 
+    @Test("session activity scanner maps timestamp-prefixed rollout names to index ids")
+    func sessionActivityMapsTimestampPrefixedRolloutNamesToIndexIDs() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let indexedID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        try """
+        {"id":"\(indexedID)","thread_name":"Index-backed candidate","updated_at":"2026-07-01T00:00:00Z"}
+        """.write(to: root.url.appending(path: "session_index.jsonl"), atomically: true, encoding: .utf8)
+        let indexedFile = sessionDir.appending(path: "rollout-2026-06-29T00-00-00-\(indexedID).jsonl")
+        try sessionFile(id: indexedID, timestamp: "2026-07-01T00:00:00Z", title: "File title")
+            .write(to: indexedFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: ISO8601DateFormatter().date(from: "2026-06-01T00:00:00Z")!],
+            ofItemAtPath: indexedFile.path)
+
+        let fillerDate = ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!
+        for index in 0..<60 {
+            let id = String(format: "bbbbbbbb-bbbb-4bbb-8bbb-%012d", index)
+            let file = sessionDir.appending(path: "rollout-\(id).jsonl")
+            try sessionFile(id: id, timestamp: "2026-06-30T00:00:00Z", title: "Filler \(index)")
+                .write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: fillerDate], ofItemAtPath: file.path)
+        }
+
+        let summary = try SessionActivityScanner(codexHome: root.url).scan(limit: 1)
+
+        #expect(summary.items.map(\.id) == [indexedID])
+        #expect(summary.items.first?.title == "Index-backed candidate")
+    }
+
+    @Test("session activity scanner reads large session activity from file edges")
+    func sessionActivityReadsLargeSessionActivityFromFileEdges() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let sessionID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        let filler = String(repeating: "x", count: 180_000)
+        try """
+        {"timestamp":"2026-06-29T00:00:00Z","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/Users/me/dev/codex-runway"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"message","role":"user","content":"Large edge scan"}}
+        {"timestamp":"2026-06-29T00:02:00Z","type":"event_msg","payload":{"type":"message","role":"assistant","content":"\(filler)"}}
+        {"timestamp":"2026-07-01T00:00:00Z","type":"event_msg","payload":{"type":"approval_request"}}
+        {"timestamp":"2026-07-01T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":50,"reasoning_output_tokens":25,"total_tokens":1075}}},"turn_context":{"model":"gpt-5.5"}}
+        """.write(to: sessionDir.appending(path: "rollout-2026-06-29T00-00-00-\(sessionID).jsonl"), atomically: true, encoding: .utf8)
+
+        let summary = try SessionActivityScanner(codexHome: root.url).scan(limit: 1)
+        let session = try #require(summary.items.first)
+
+        #expect(session.id == sessionID)
+        #expect(session.title == "Large edge scan")
+        #expect(session.projectName == "codex-runway")
+        #expect(session.state == .needsAttention)
+        #expect(session.totals.totalTokens == 1_075)
+        #expect(session.totals.cachedInputTokens == 200)
+        #expect(session.totals.outputTokens == 75)
+    }
+
+    @Test("session activity scanner ignores stale large files outside recent candidates")
+    func sessionActivityIgnoresStaleLargeFilesOutsideRecentCandidates() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+
+        let recentID = "77777777-7777-4777-8777-777777777777"
+        let recentFile = sessionDir.appending(path: "rollout-\(recentID).jsonl")
+        try sessionFile(id: recentID, timestamp: "2026-07-01T00:00:00Z", title: "Recent candidate")
+            .write(to: recentFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!],
+            ofItemAtPath: recentFile.path)
+
+        let fillerDate = ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!
+        for index in 0..<55 {
+            let id = String(format: "99999999-9999-4999-8999-%012d", index)
+            let file = sessionDir.appending(path: "rollout-\(id).jsonl")
+            try sessionFile(id: id, timestamp: "2026-06-30T00:00:00Z", title: "Filler \(index)")
+                .write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: fillerDate], ofItemAtPath: file.path)
+        }
+
+        let oldDate = ISO8601DateFormatter().date(from: "2026-06-01T00:00:00Z")!
+        for index in 0..<10 {
+            let id = String(format: "88888888-8888-4888-8888-%012d", index)
+            let file = sessionDir.appending(path: "rollout-\(id).jsonl")
+            let filler = String(repeating: "x", count: 8_192)
+            try """
+            {"timestamp":"2035-01-01T00:00:00Z","type":"session_meta","payload":{"id":"\(id)","cwd":"/Users/me/dev/old-\(index)"}}
+            {"timestamp":"2035-01-01T00:00:01Z","type":"event_msg","payload":{"type":"message","role":"user","content":"\(filler)"}}
+            """.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: file.path)
+        }
+
+        let summary = try SessionActivityScanner(codexHome: root.url).scan(limit: 1)
+
+        #expect(summary.items.map(\.id) == [recentID])
+    }
+
     @Test("online analytics estimates dollars from token parts even when credits are zero")
     func analyticsCreditsZeroStillPricesTokenParts() throws {
         let calculatedAt = ISO8601DateFormatter().date(from: "2026-06-30T10:00:00Z")!
