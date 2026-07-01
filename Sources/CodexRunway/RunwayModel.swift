@@ -14,6 +14,73 @@ enum RunwayRefreshSection: CaseIterable, Hashable {
     case recentSessions
 }
 
+private enum RunwayModelAuthError: Error {
+    case load(Error)
+}
+
+struct RunwayModelServices: Sendable {
+    var loadValidAuth: @Sendable (_ preferCached: Bool, _ cachedAuth: CodexAuth?) async throws -> CodexAuth
+    var fetchQuota: @Sendable (CodexAuth) async throws -> QuotaSnapshot
+    var fetchResetCredits: @Sendable (CodexAuth) async throws -> ResetCreditsSnapshot
+    var scanAPIEquivalent: @Sendable (DateInterval, Date) async throws -> ApiEquivalentSummary
+    var fetchDailyWorkspaceUsage: @Sendable (CodexAuth, String, String, DateInterval, Date) async throws -> ApiEquivalentSummary
+    var dryRunSessions: @Sendable () async throws -> SessionRepairReport
+    var scanRecentSessions: @Sendable (Int) async throws -> SessionActivitySummary
+
+    static func live(
+        authStore: CodexAuthStore = CodexAuthStore(),
+        quotaClient: QuotaClient = QuotaClient(),
+        sessionRepair: SessionRepairService = SessionRepairService(),
+        sessionActivityScanner: SessionActivityScanner = SessionActivityScanner()) -> Self
+    {
+        Self(
+            loadValidAuth: { preferCached, cachedAuth in
+                var auth = preferCached ? cachedAuth : nil
+                if auth == nil {
+                    do {
+                        auth = try authStore.load()
+                    } catch {
+                        throw RunwayModelAuthError.load(error)
+                    }
+                }
+                guard var validAuth = auth else { throw URLError(.userAuthenticationRequired) }
+                if TokenInspector.isExpired(validAuth.tokens.accessToken) {
+                    try await TokenRefresher().refresh(&validAuth, store: authStore)
+                }
+                return validAuth
+            },
+            fetchQuota: { auth in
+                try await quotaClient.fetchQuota(auth: auth)
+            },
+            fetchResetCredits: { auth in
+                try await quotaClient.fetchResetCredits(auth: auth)
+            },
+            scanAPIEquivalent: { window, calculatedAt in
+                try await Task.detached {
+                    try UsageCostScanner().scanAPIEquivalent(window: window, calculatedAt: calculatedAt)
+                }.value
+            },
+            fetchDailyWorkspaceUsage: { auth, startDate, endDate, window, calculatedAt in
+                try await quotaClient.fetchDailyWorkspaceUsage(
+                    auth: auth,
+                    startDate: startDate,
+                    endDate: endDate,
+                    window: window,
+                    calculatedAt: calculatedAt)
+            },
+            dryRunSessions: {
+                try await Task.detached {
+                    try sessionRepair.dryRun()
+                }.value
+            },
+            scanRecentSessions: { limit in
+                try await Task.detached {
+                    try sessionActivityScanner.scan(limit: limit)
+                }.value
+            })
+    }
+}
+
 @MainActor
 final class RunwayModel: ObservableObject {
     struct DetailLine: Identifiable {
@@ -44,10 +111,8 @@ final class RunwayModel: ObservableObject {
     @Published private(set) var refreshingSections: Set<RunwayRefreshSection> = []
     @Published private(set) var isRefreshingAll = false
 
-    private let authStore = CodexAuthStore()
-    private let quotaClient = QuotaClient()
+    private let services: RunwayModelServices
     private let sessionRepair = SessionRepairService()
-    private let sessionActivityScanner = SessionActivityScanner()
     private let costCacheStore = UsageCostCacheStore()
     private let alertStore = RunwayAlertStore()
     private let statusExporter = RunwayStatusExporter()
@@ -59,8 +124,9 @@ final class RunwayModel: ObservableObject {
     private var latestCost: ApiEquivalentSummary?
     private var latestSessionReport: SessionRepairReport?
 
-    init(settings: RunwaySettings) {
+    init(settings: RunwaySettings, services: RunwayModelServices = .live()) {
         self.settings = settings
+        self.services = services
         let l10n = settings.l10n
         self.statusText = l10n.text(.statusLogin)
         self.quotaText = l10n.text(.notLoaded)
@@ -179,8 +245,7 @@ final class RunwayModel: ObservableObject {
 
     private func loadSessionReport() async {
         do {
-            let service = sessionRepair
-            let report = try await Task.detached { try service.dryRun() }.value
+            let report = try await services.dryRunSessions()
             applySessionReport(report)
         } catch {
             sessionText = l10n.text(.sessionScanFailed)
@@ -211,8 +276,7 @@ final class RunwayModel: ObservableObject {
 
     private func loadRecentSessions() async {
         do {
-            let scanner = sessionActivityScanner
-            let summary = try await Task.detached { try scanner.scan(limit: 5) }.value
+            let summary = try await services.scanRecentSessions(5)
             applyRecentSessions(summary.items)
         } catch {
             recentSessions = []
@@ -262,60 +326,87 @@ final class RunwayModel: ObservableObject {
         isRefreshingAll = true
         defer { isRefreshingAll = false }
 
+        let shouldRefreshSessions = settings.preferences.showsSessionRepairSummary
+        let shouldRefreshRecent = settings.preferences.showsRecentSessions
+        async let sessionReport: Void = refreshSessionReportIfNeeded(shouldRefreshSessions)
+        async let recentSessions: Void = refreshRecentSessionsIfNeeded(shouldRefreshRecent)
         var remoteError: Error?
         do {
             let auth = try await loadValidAuth(preferCached: false)
-            var quotaSnapshot: QuotaSnapshot?
-            await withRefresh([.quota]) {
-                do {
-                    let snapshot = try await quotaClient.fetchQuota(auth: auth)
-                    quotaSnapshot = snapshot
-                    latestQuota = snapshot
-                    applyQuota(snapshot)
-                    deliverAlerts(RunwayAlertDecider.quotaAlerts(snapshot), enabled: settings.preferences.quotaAlertsEnabled)
-                } catch {
-                    remoteError = error
-                    statusText = l10n.text(.statusError)
-                    quotaText = l10n.text(.statusError)
-                    quotaLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
-                }
-            }
-            await withRefresh([.resetCredits]) {
-                do {
-                    let resetSnapshot = try await quotaClient.fetchResetCredits(auth: auth)
-                    latestResetCredits = resetSnapshot
-                    applyResetCredits(resetSnapshot)
-                    deliverAlerts(RunwayAlertDecider.resetCreditAlerts(resetSnapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
-                } catch {
-                    remoteError = error
-                    resetCreditsText = l10n.text(.statusError)
-                    resetCreditLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
-                }
-            }
-            if settings.preferences.showsCostSummary, let quotaSnapshot {
+            async let quotaResultTask = refreshQuotaForFullRefresh(auth: auth)
+            async let resetErrorTask = refreshResetCreditsForFullRefresh(auth: auth)
+            let quotaResult = await quotaResultTask
+            if case .success(let quotaSnapshot) = quotaResult, settings.preferences.showsCostSummary {
                 await withRefresh([.apiCost]) {
                     await scanCost(quotaSnapshot, auth: auth)
                 }
+            }
+            if case .failure(let error) = quotaResult {
+                remoteError = error
+            }
+            if let resetError = await resetErrorTask {
+                remoteError = resetError
             }
         } catch {
             remoteError = error
             statusText = l10n.text(.statusError)
         }
-        if settings.preferences.showsSessionRepairSummary {
-            await refreshSessionReportNow()
-        }
-        if settings.preferences.showsRecentSessions {
-            await refreshRecentSessionsNow()
-        }
+        _ = await (sessionReport, recentSessions)
         exportStatusIfNeeded()
         lastError = remoteError?.localizedDescription
+    }
+
+    private func refreshSessionReportIfNeeded(_ isShown: Bool) async {
+        guard isShown else { return }
+        await refreshSessionReportNow()
+    }
+
+    private func refreshRecentSessionsIfNeeded(_ isShown: Bool) async {
+        guard isShown else { return }
+        await refreshRecentSessionsNow()
+    }
+
+    private func refreshQuotaForFullRefresh(auth: CodexAuth) async -> Result<QuotaSnapshot, Error> {
+        var result: Result<QuotaSnapshot, Error> = .failure(CancellationError())
+        await withRefresh([.quota]) {
+            do {
+                let snapshot = try await services.fetchQuota(auth)
+                latestQuota = snapshot
+                applyQuota(snapshot)
+                deliverAlerts(RunwayAlertDecider.quotaAlerts(snapshot), enabled: settings.preferences.quotaAlertsEnabled)
+                result = .success(snapshot)
+            } catch {
+                statusText = l10n.text(.statusError)
+                quotaText = l10n.text(.statusError)
+                quotaLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                result = .failure(error)
+            }
+        }
+        return result
+    }
+
+    private func refreshResetCreditsForFullRefresh(auth: CodexAuth) async -> Error? {
+        var refreshError: Error?
+        await withRefresh([.resetCredits]) {
+            do {
+                let snapshot = try await services.fetchResetCredits(auth)
+                latestResetCredits = snapshot
+                applyResetCredits(snapshot)
+                deliverAlerts(RunwayAlertDecider.resetCreditAlerts(snapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
+            } catch {
+                resetCreditsText = l10n.text(.statusError)
+                resetCreditLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
+                refreshError = error
+            }
+        }
+        return refreshError
     }
 
     private func refreshQuotaNow() async {
         await withRefresh([.quota]) {
             do {
                 let auth = try await loadValidAuth(preferCached: false)
-                let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
+                let quotaSnapshot = try await services.fetchQuota(auth)
                 latestQuota = quotaSnapshot
                 applyQuota(quotaSnapshot)
                 deliverAlerts(RunwayAlertDecider.quotaAlerts(quotaSnapshot), enabled: settings.preferences.quotaAlertsEnabled)
@@ -334,7 +425,7 @@ final class RunwayModel: ObservableObject {
         await withRefresh([.resetCredits]) {
             do {
                 let auth = try await loadValidAuth(preferCached: true)
-                let snapshot = try await quotaClient.fetchResetCredits(auth: auth)
+                let snapshot = try await services.fetchResetCredits(auth)
                 latestResetCredits = snapshot
                 applyResetCredits(snapshot)
                 deliverAlerts(RunwayAlertDecider.resetCreditAlerts(snapshot), enabled: settings.preferences.resetCreditAlertsEnabled)
@@ -352,7 +443,7 @@ final class RunwayModel: ObservableObject {
         await withRefresh([.apiCost]) {
             do {
                 let auth = try await loadValidAuth(preferCached: true)
-                let quotaSnapshot = try await quotaClient.fetchQuota(auth: auth)
+                let quotaSnapshot = try await services.fetchQuota(auth)
                 latestQuota = quotaSnapshot
                 applyQuota(quotaSnapshot)
                 await scanCost(quotaSnapshot, auth: auth)
@@ -372,9 +463,7 @@ final class RunwayModel: ObservableObject {
     func queryCost(range: ApiCostRange) async throws -> ApiEquivalentSummary {
         let now = Date()
         do {
-            let local = try await Task.detached {
-                try UsageCostScanner().scanAPIEquivalent(window: range.window, calculatedAt: now)
-            }.value
+            let local = try await services.scanAPIEquivalent(range.window, now)
             if local.isDisplayableCost {
                 return local
             }
@@ -382,35 +471,22 @@ final class RunwayModel: ObservableObject {
             // Fall through to online analytics.
         }
         let auth = try await loadValidAuth(preferCached: true)
-        let summary = try await quotaClient.fetchDailyWorkspaceUsage(
-            auth: auth,
-            startDate: range.apiStartDate,
-            endDate: range.apiEndDate,
-            window: range.window,
-            calculatedAt: now)
+        let summary = try await services.fetchDailyWorkspaceUsage(auth, range.apiStartDate, range.apiEndDate, range.window, now)
         guard summary.isDisplayableCost else { throw CostRangeQueryError.usageUnavailable }
         return summary
     }
 
     private func loadValidAuth(preferCached: Bool) async throws -> CodexAuth {
-        var auth: CodexAuth
-        if preferCached, let latestAuth {
-            auth = latestAuth
-        } else {
-            do {
-                auth = try authStore.load()
-            } catch {
-                latestAuth = nil
-                accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
-                throw error
-            }
+        do {
+            let auth = try await services.loadValidAuth(preferCached, latestAuth)
+            latestAuth = auth
+            accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: latestQuota?.plan)
+            return auth
+        } catch RunwayModelAuthError.load(let error) {
+            latestAuth = nil
+            accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
+            throw error
         }
-        if TokenInspector.isExpired(auth.tokens.accessToken) {
-            try await TokenRefresher().refresh(&auth, store: authStore)
-        }
-        latestAuth = auth
-        accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: latestQuota?.plan)
-        return auth
     }
 
     private func applyQuota(_ quota: QuotaSnapshot) {
@@ -483,9 +559,7 @@ final class RunwayModel: ObservableObject {
         let window = DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
         let now = Date()
         do {
-            let local = try await Task.detached {
-                try UsageCostScanner().scanAPIEquivalent(window: window, calculatedAt: now)
-            }.value
+            let local = try await services.scanAPIEquivalent(window, now)
             if local.isDisplayableCost {
                 applyCost(local)
                 cacheCost(local)
@@ -499,11 +573,12 @@ final class RunwayModel: ObservableObject {
             }
         }
         do {
-            let summary = try await quotaClient.fetchDailyWorkspaceUsage(
-                auth: auth,
-                startDate: Self.apiDateString(now.addingTimeInterval(-30 * 86_400)),
-                endDate: Self.apiDateString(now.addingTimeInterval(86_400)),
-                window: window)
+            let summary = try await services.fetchDailyWorkspaceUsage(
+                auth,
+                Self.apiDateString(now.addingTimeInterval(-30 * 86_400)),
+                Self.apiDateString(now.addingTimeInterval(86_400)),
+                window,
+                now)
             if summary.isDisplayableCost {
                 applyCost(summary)
                 cacheCost(summary)

@@ -27,4 +27,7 @@ let package = Package(
         .testTarget(
             name: "CodexRunwayCoreTests",
             dependencies: ["CodexRunwayCore"]),
+        .testTarget(
+            name: "CodexRunwayTests",
+            dependencies: ["CodexRunway", "CodexRunwayCore"]),
     ])
