@@ -21,6 +21,10 @@ public struct UpdateInstallEnvironment: Sendable {
         return .ready
     }
 
+    public func shouldCheckForUpdatesOnLaunch(automaticallyChecksForUpdates: Bool) -> Bool {
+        automaticallyChecksForUpdates && readiness == .ready
+    }
+
     public static func hasValidSparklePublicKey(_ key: String?) -> Bool {
         guard let key else { return false }
         return !key.isEmpty && !key.contains("__")

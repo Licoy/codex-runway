@@ -15,6 +15,7 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
         super.init()
         configureSparkle()
         applyPreferences()
+        checkForUpdatesOnLaunch()
     }
 
     func applyPreferences() {
@@ -76,11 +77,21 @@ final class UpdaterService: NSObject, SPUUpdaterDelegate {
     }
 
     private var installReadiness: UpdateInstallReadiness {
+        installEnvironment.readiness
+    }
+
+    private var installEnvironment: UpdateInstallEnvironment {
         UpdateInstallEnvironment(
             bundlePathExtension: Bundle.main.bundleURL.pathExtension,
             sparklePublicKey: sparklePublicKey,
             hasUpdater: updater != nil)
-            .readiness
+    }
+
+    private func checkForUpdatesOnLaunch() {
+        guard installEnvironment.shouldCheckForUpdatesOnLaunch(
+            automaticallyChecksForUpdates: settings.preferences.automaticallyChecksForUpdates)
+        else { return }
+        updater?.checkForUpdatesInBackground()
     }
 
     private var isAppBundle: Bool {

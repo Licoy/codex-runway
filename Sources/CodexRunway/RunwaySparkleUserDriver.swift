@@ -192,9 +192,21 @@ final class RunwaySparkleUserDriver: NSObject, SPUUserDriver {
     }
 
     private func showError(title: L10nKey, error: Error) {
+        let message = Self.errorMessage(for: error, proxyHint: text(.updateNetworkProxyHint))
+        _ = alert(title: title, message: message, buttons: [text(.ok)])
+    }
+
+    static func errorMessage(for error: Error, proxyHint: String) -> String {
         let nsError = error as NSError
         let message = nsError.localizedRecoverySuggestion ?? nsError.localizedDescription
-        _ = alert(title: title, message: message, buttons: [text(.ok)])
+        var current: NSError? = nsError
+        while let checked = current {
+            if checked.domain == NSURLErrorDomain {
+                return "\(message)\n\n\(proxyHint)"
+            }
+            current = checked.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return message
     }
 
     private func alert(title: L10nKey, message: String, buttons: [String]) -> NSApplication.ModalResponse {

@@ -32,6 +32,8 @@ struct PreferencesTests {
         #expect(chinese.text(.updateInstallAndRelaunch) == "安装并重启")
         #expect(english.text(.statusBarMetersDetailBoth) == "Both")
         #expect(chinese.text(.statusBarMetersDetailBoth) == "两者都显示")
+        #expect(english.text(.updateNetworkProxyHint).contains("system proxy bypass"))
+        #expect(chinese.text(.updateNetworkProxyHint).contains("系统代理绕过"))
     }
 
     @Test("all localization keys have English and Chinese translations")

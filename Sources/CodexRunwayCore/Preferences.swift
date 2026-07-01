@@ -183,6 +183,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case updateInstalledMessage
     case updateInstalling
     case updateLearnMore
+    case updateNetworkProxyHint
     case updateReadyToInstall
     case updateSigningKeyMissing
     case updateSkipVersion

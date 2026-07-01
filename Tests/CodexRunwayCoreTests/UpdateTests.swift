@@ -13,6 +13,18 @@ struct UpdateTests {
         #expect(UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: "public-key", hasUpdater: true).readiness == .ready)
     }
 
+    @Test("launch update check only runs when signed app automatic checks are enabled")
+    func launchUpdateCheckPolicy() {
+        let ready = UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: "public-key", hasUpdater: true)
+
+        #expect(ready.shouldCheckForUpdatesOnLaunch(automaticallyChecksForUpdates: true))
+        #expect(!ready.shouldCheckForUpdatesOnLaunch(automaticallyChecksForUpdates: false))
+        #expect(!UpdateInstallEnvironment(bundlePathExtension: "", sparklePublicKey: "public-key", hasUpdater: true)
+            .shouldCheckForUpdatesOnLaunch(automaticallyChecksForUpdates: true))
+        #expect(!UpdateInstallEnvironment(bundlePathExtension: "app", sparklePublicKey: nil, hasUpdater: false)
+            .shouldCheckForUpdatesOnLaunch(automaticallyChecksForUpdates: true))
+    }
+
     @Test("old preferences enable automatic updates by default")
     func oldPreferencesEnableAutomaticUpdates() throws {
         let data = """
