@@ -200,6 +200,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case testNotificationSubtitle
     case testNotificationTitle
     case threads
+    case today
     case thisMonth
     case turns
     case unknown

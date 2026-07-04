@@ -47,6 +47,20 @@ struct ApiCostRangeTests {
         #expect(range.apiEndDate == "2026-06-30")
     }
 
+    @Test("today starts at the local day")
+    func todayUsesLocalCalendarDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let now = Self.date("2026-06-30T06:03:12Z")
+
+        let range = ApiCostRange.today(now: now, calendar: calendar)
+
+        #expect(range.window.start == Self.date("2026-06-29T16:00:00Z"))
+        #expect(range.window.end == now)
+        #expect(range.apiStartDate == "2026-06-30")
+        #expect(range.apiEndDate == "2026-06-30")
+    }
+
     @Test("custom range includes full start and end days")
     func customRangeIncludesWholeDays() throws {
         var calendar = Calendar(identifier: .gregorian)

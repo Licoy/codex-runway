@@ -6,13 +6,14 @@ struct ApiCostDetailView: View {
     @ObservedObject var model: RunwayModel
     var l10n: L10n
 
-    @State private var selectedRange: ApiCostRangeMode = .current
+    @State private var selectedRange: ApiCostRangeMode = .today
     @State private var customDateRange: MDateRange? = .init(startDate: Date(), endDate: Date())
     @State private var showsCustomCalendar = false
     @State private var isLoading = false
     @State private var transientDetail: ApiEquivalentSummary?
     @State private var transientRange: ApiCostRangeMode?
     @State private var queryError: String?
+    @State private var didQueryInitialRange = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -29,6 +30,11 @@ struct ApiCostDetailView: View {
         .padding(.top, 2)
         .padding(.trailing, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task {
+            guard !didQueryInitialRange else { return }
+            didQueryInitialRange = true
+            rangeChanged(selectedRange)
+        }
     }
 
     @ViewBuilder
@@ -55,15 +61,13 @@ struct ApiCostDetailView: View {
 
     private var activeDetail: ApiEquivalentSummary? {
         if selectedRange == .current { return model.costDetail }
-        return transientDetail ?? model.costDetail
+        guard transientRange == selectedRange else { return nil }
+        return transientDetail
     }
 
     private var activeRangeTitle: String {
         if selectedRange == .current { return l10n.text(.currentCycle) }
-        guard transientDetail != nil, let transientRange else {
-            return l10n.text(.currentCycle)
-        }
-        return transientRange.title(l10n)
+        return selectedRange.title(l10n)
     }
 
     @ViewBuilder
@@ -223,6 +227,8 @@ struct ApiCostDetailView: View {
     private func rangeChanged(_ range: ApiCostRangeMode) {
         queryError = nil
         switch range {
+        case .today:
+            queryCost(ApiCostRange.today(), mode: range)
         case .current:
             break
         case .previous:
@@ -256,6 +262,8 @@ struct ApiCostDetailView: View {
     private func queryCost(_ range: ApiCostRange, mode: ApiCostRangeMode) {
         isLoading = true
         queryError = nil
+        transientDetail = nil
+        transientRange = nil
         Task { @MainActor in
             defer { isLoading = false }
             do {
@@ -327,6 +335,7 @@ struct ApiCostDetailView: View {
 }
 
 private enum ApiCostRangeMode: String, CaseIterable, Identifiable {
+    case today
     case current
     case previous
     case thisMonth
@@ -336,6 +345,8 @@ private enum ApiCostRangeMode: String, CaseIterable, Identifiable {
 
     func title(_ l10n: L10n) -> String {
         switch self {
+        case .today:
+            return l10n.text(.today)
         case .current:
             return l10n.text(.currentCycle)
         case .previous:

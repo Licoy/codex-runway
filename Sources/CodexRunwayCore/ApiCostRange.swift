@@ -37,6 +37,13 @@ public struct ApiCostRange: Sendable, Equatable {
         return make(window: DateInterval(start: start, end: now), calendar: calendar)
     }
 
+    public static func today(
+        now: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent) -> ApiCostRange
+    {
+        make(window: DateInterval(start: calendar.startOfDay(for: now), end: now), calendar: calendar)
+    }
+
     public static func custom(
         start: Date,
         end: Date,
