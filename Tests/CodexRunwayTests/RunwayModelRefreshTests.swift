@@ -86,12 +86,12 @@ struct RunwayModelRefreshTests {
         #expect(captured.window.end == captured.now)
     }
 
-    @Test("current cycle API cost summary scans the quota weekly range")
+    @Test("current cycle API cost summary scans elapsed quota weekly range")
     func currentCycleAPICostSummaryScansQuotaWindow() async throws {
         let recorder = CostRangeRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateApiCostSummaryRange(.current)
-        let quota = Self.quotaSnapshot()
+        let quota = Self.quotaSnapshot(secondaryReset: Date().addingTimeInterval(10_080 * 60))
         let services = Self.costRangeServices(quota: quota, recorder: recorder)
         let model = RunwayModel(settings: settings, services: services)
 
@@ -102,7 +102,28 @@ struct RunwayModelRefreshTests {
         let reset = try #require(secondary.resetsAt)
         let minutes = try #require(secondary.windowMinutes)
         #expect(captured.window.start == reset.addingTimeInterval(-TimeInterval(minutes * 60)))
-        #expect(captured.window.end == reset)
+        #expect(captured.window.end == captured.now)
+    }
+
+    @Test("previous cycle API cost summary scans the full previous quota weekly range")
+    func previousCycleAPICostSummaryScansFullPreviousQuotaWindow() async throws {
+        let recorder = CostRangeRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        settings.updateApiCostSummaryRange(.previous)
+        let quota = Self.quotaSnapshot(secondaryReset: Date().addingTimeInterval(10_080 * 60))
+        let services = Self.costRangeServices(quota: quota, recorder: recorder)
+        let model = RunwayModel(settings: settings, services: services)
+
+        model.refreshCost()
+
+        let captured = try await recorder.waitForWindow(count: 2)
+        let secondary = try #require(quota.secondary)
+        let reset = try #require(secondary.resetsAt)
+        let minutes = try #require(secondary.windowMinutes)
+        let duration = TimeInterval(minutes * 60)
+        let cycleStart = reset.addingTimeInterval(-duration)
+        #expect(captured.window.start == cycleStart.addingTimeInterval(-duration))
+        #expect(captured.window.end == cycleStart)
     }
 
     @Test("API cost summary hides bad analytics response for unavailable selected range")
@@ -115,14 +136,14 @@ struct RunwayModelRefreshTests {
         let secondary = try #require(quota.secondary)
         let reset = try #require(secondary.resetsAt)
         let minutes = try #require(secondary.windowMinutes)
-        let currentWindow = DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
+        let currentStart = reset.addingTimeInterval(-TimeInterval(minutes * 60))
         let services = RunwayModelServices(
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
             scanAPIEquivalent: { window, now in
                 await recorder.record(window: window, now: now)
-                if window == currentWindow {
+                if window.start == currentStart {
                     return Self.costSummary(window: window, calculatedAt: now)
                 }
                 return ApiEquivalentSummary.unavailable(window: window, calculatedAt: now)
@@ -173,12 +194,12 @@ struct RunwayModelRefreshTests {
         return defaults
     }
 
-    nonisolated private static func quotaSnapshot() -> QuotaSnapshot {
+    nonisolated private static func quotaSnapshot(secondaryReset: Date? = nil) -> QuotaSnapshot {
         let now = Date(timeIntervalSince1970: 1_782_710_000)
         return QuotaSnapshot(
             plan: "pro",
             primary: RateWindow(usedPercent: 20, windowMinutes: 300, resetsAt: now.addingTimeInterval(3_600)),
-            secondary: RateWindow(usedPercent: 30, windowMinutes: 10_080, resetsAt: now.addingTimeInterval(10_080 * 60)),
+            secondary: RateWindow(usedPercent: 30, windowMinutes: 10_080, resetsAt: secondaryReset ?? now.addingTimeInterval(10_080 * 60)),
             additionalWindows: [],
             creditsBalance: nil,
             updatedAt: now)

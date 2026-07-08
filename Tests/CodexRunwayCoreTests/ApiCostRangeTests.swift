@@ -33,6 +33,20 @@ struct ApiCostRangeTests {
         #expect(range.apiEndDate == "2026-06-24")
     }
 
+    @Test("previous cycle can use an explicit full current cycle window")
+    func previousCycleUsesExplicitCurrentCycleWindow() {
+        let currentWindow = DateInterval(
+            start: Self.date("2026-06-24T00:00:00Z"),
+            end: Self.date("2026-07-01T00:00:00Z"))
+
+        let range = ApiCostRange.previousCycle(from: currentWindow, calendar: Self.utcCalendar)
+
+        #expect(range.window.start == Self.date("2026-06-17T00:00:00Z"))
+        #expect(range.window.end == Self.date("2026-06-24T00:00:00Z"))
+        #expect(range.apiStartDate == "2026-06-17")
+        #expect(range.apiEndDate == "2026-06-24")
+    }
+
     @Test("this month starts at the local first day")
     func thisMonthUsesLocalCalendarMonth() {
         var calendar = Calendar(identifier: .gregorian)

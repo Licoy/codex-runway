@@ -15,18 +15,32 @@ public struct ApiCostRange: Sendable, Equatable {
         from summary: ApiEquivalentSummary,
         calendar: Calendar = .autoupdatingCurrent) -> ApiCostRange
     {
-        make(window: summary.window, calendar: calendar)
+        range(window: summary.window, calendar: calendar)
+    }
+
+    public static func range(
+        window: DateInterval,
+        calendar: Calendar = .autoupdatingCurrent) -> ApiCostRange
+    {
+        make(window: window, calendar: calendar)
     }
 
     public static func previousCycle(
         from summary: ApiEquivalentSummary,
         calendar: Calendar = .autoupdatingCurrent) -> ApiCostRange
     {
-        let duration = summary.window.duration
-        let window = DateInterval(
-            start: summary.window.start.addingTimeInterval(-duration),
-            end: summary.window.start)
-        return make(window: window, calendar: calendar)
+        previousCycle(from: summary.window, calendar: calendar)
+    }
+
+    public static func previousCycle(
+        from window: DateInterval,
+        calendar: Calendar = .autoupdatingCurrent) -> ApiCostRange
+    {
+        let duration = window.duration
+        let previous = DateInterval(
+            start: window.start.addingTimeInterval(-duration),
+            end: window.start)
+        return make(window: previous, calendar: calendar)
     }
 
     public static func thisMonth(

@@ -238,11 +238,11 @@ struct ApiCostDetailView: View {
         case .current:
             break
         case .previous:
-            guard let detail = model.costDetail else {
+            guard let costRange = model.previousCycleCostRange() else {
                 queryError = l10n.text(.usageAnalyticsUnavailable)
                 return
             }
-            queryCost(ApiCostRange.previousCycle(from: detail), mode: range)
+            queryCost(costRange, mode: range)
         case .thisMonth:
             queryCost(ApiCostRange.thisMonth(), mode: range)
         case .custom:

@@ -122,6 +122,7 @@ final class RunwayModel: ObservableObject {
     private var latestQuota: QuotaSnapshot?
     private var latestResetCredits: ResetCreditsSnapshot?
     private var latestCost: ApiEquivalentSummary?
+    private var latestCurrentCycleFullWindow: DateInterval?
     private var latestDisplayedCost: ApiEquivalentSummary?
     private var latestDisplayedCostRange: ApiCostSummaryRange?
     private var latestSessionReport: SessionRepairReport?
@@ -476,6 +477,10 @@ final class RunwayModel: ObservableObject {
         return try await queryCost(range: range, auth: auth, now: now)
     }
 
+    func previousCycleCostRange() -> ApiCostRange? {
+        latestCurrentCycleFullWindow.map { ApiCostRange.previousCycle(from: $0) }
+    }
+
     private func queryCost(range: ApiCostRange, auth: CodexAuth, now: Date) async throws -> ApiEquivalentSummary {
         do {
             let local = try await services.scanAPIEquivalent(range.window, now)
@@ -570,7 +575,9 @@ final class RunwayModel: ObservableObject {
     private func scanCost(_ quota: QuotaSnapshot, auth: CodexAuth) async {
         let now = Date()
         let range = settings.preferences.apiCostSummaryRange
-        let current = await scanCurrentCycleCost(quota, auth: auth, now: now)
+        let currentWindows = currentCycleWindows(from: quota, now: now)
+        latestCurrentCycleFullWindow = currentWindows?.full
+        let current = await scanCurrentCycleCost(window: currentWindows?.elapsed, auth: auth, now: now)
         if let current {
             applyCurrentCost(current)
         }
@@ -582,8 +589,8 @@ final class RunwayModel: ObservableObject {
                 guard let current else { throw CostRangeQueryError.usageUnavailable }
                 summary = current
             case .previous:
-                guard let current else { throw CostRangeQueryError.usageUnavailable }
-                summary = try await queryCost(range: ApiCostRange.previousCycle(from: current), auth: auth, now: now)
+                guard current != nil, let fullWindow = currentWindows?.full else { throw CostRangeQueryError.usageUnavailable }
+                summary = try await queryCost(range: ApiCostRange.previousCycle(from: fullWindow), auth: auth, now: now)
             case .today:
                 summary = try await queryCost(range: ApiCostRange.today(now: now), auth: auth, now: now)
             case .thisMonth:
@@ -600,20 +607,21 @@ final class RunwayModel: ObservableObject {
         }
     }
 
-    private func scanCurrentCycleCost(_ quota: QuotaSnapshot, auth: CodexAuth, now: Date) async -> ApiEquivalentSummary? {
-        guard let window = currentCycleWindow(from: quota) else { return nil }
+    private func scanCurrentCycleCost(window: DateInterval?, auth: CodexAuth, now: Date) async -> ApiEquivalentSummary? {
+        guard let window else { return nil }
         do {
             let local = try await services.scanAPIEquivalent(window, now)
             if local.isDisplayableCost { return local }
         } catch {
             // Fall through to online analytics.
         }
+        let range = ApiCostRange.range(window: window)
         do {
             let summary = try await services.fetchDailyWorkspaceUsage(
                 auth,
-                Self.apiDateString(now.addingTimeInterval(-30 * 86_400)),
-                Self.apiDateString(now.addingTimeInterval(86_400)),
-                window,
+                range.apiStartDate,
+                range.apiEndDate,
+                range.window,
                 now)
             return summary.isDisplayableCost ? summary : nil
         } catch {
@@ -621,12 +629,15 @@ final class RunwayModel: ObservableObject {
         }
     }
 
-    private func currentCycleWindow(from quota: QuotaSnapshot) -> DateInterval? {
+    private func currentCycleWindows(from quota: QuotaSnapshot, now: Date) -> (full: DateInterval, elapsed: DateInterval)? {
         guard let secondary = quota.secondary,
               let reset = secondary.resetsAt,
               let minutes = secondary.windowMinutes
         else { return nil }
-        return DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
+        let start = reset.addingTimeInterval(-TimeInterval(minutes * 60))
+        let full = DateInterval(start: start, end: reset)
+        let elapsedEnd = min(max(now, start), reset)
+        return (full, DateInterval(start: start, end: elapsedEnd))
     }
 
     private func applyCurrentCost(_ summary: ApiEquivalentSummary) {
@@ -768,10 +779,6 @@ final class RunwayModel: ObservableObject {
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter.string(from: date)
-    }
-
-    private static func apiDateString(_ date: Date) -> String {
-        apiDateFormatter.string(from: date)
     }
 
     private static func displayDateString(_ value: String) -> String {
