@@ -15,6 +15,12 @@ struct ApiCostDetailView: View {
     @State private var queryError: String?
     @State private var didQueryInitialRange = false
 
+    init(model: RunwayModel, l10n: L10n, initialRange: ApiCostSummaryRange = .today) {
+        self.model = model
+        self.l10n = l10n
+        _selectedRange = State(initialValue: ApiCostRangeMode(initialRange))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             rangeControls
@@ -342,6 +348,19 @@ private enum ApiCostRangeMode: String, CaseIterable, Identifiable {
     case custom
 
     var id: String { rawValue }
+
+    init(_ range: ApiCostSummaryRange) {
+        switch range {
+        case .today:
+            self = .today
+        case .current:
+            self = .current
+        case .previous:
+            self = .previous
+        case .thisMonth:
+            self = .thisMonth
+        }
+    }
 
     func title(_ l10n: L10n) -> String {
         switch self {

@@ -122,6 +122,8 @@ final class RunwayModel: ObservableObject {
     private var latestQuota: QuotaSnapshot?
     private var latestResetCredits: ResetCreditsSnapshot?
     private var latestCost: ApiEquivalentSummary?
+    private var latestDisplayedCost: ApiEquivalentSummary?
+    private var latestDisplayedCostRange: ApiCostSummaryRange?
     private var latestSessionReport: SessionRepairReport?
 
     init(settings: RunwaySettings, services: RunwayModelServices = .live()) {
@@ -136,7 +138,10 @@ final class RunwayModel: ObservableObject {
         self.sessionText = l10n.text(.notScanned)
         self.accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
         if let cached = costCacheStore.load() {
-            applyCost(cached)
+            applyCurrentCost(cached)
+            if settings.preferences.apiCostSummaryRange == .current {
+                applyDisplayedCost(cached, range: .current)
+            }
         }
     }
 
@@ -176,8 +181,8 @@ final class RunwayModel: ObservableObject {
         if let latestQuota {
             statusText = menuBarText(for: latestQuota, now: now)
         }
-        if let latestCost {
-            costSubtitle = costSubtitle(for: latestCost, now: now)
+        if let latestDisplayedCost, let latestDisplayedCostRange {
+            costSubtitle = costSubtitle(for: latestDisplayedCost, range: latestDisplayedCostRange, now: now)
         }
     }
 
@@ -232,7 +237,12 @@ final class RunwayModel: ObservableObject {
         accountDisplay = CodexAccountDisplay.make(auth: latestAuth, quotaPlan: latestQuota?.plan)
         if let latestQuota { applyQuota(latestQuota) } else { statusText = l10n.text(.statusLogin); quotaText = l10n.text(.notLoaded) }
         if let latestResetCredits { applyResetCredits(latestResetCredits) } else { resetCreditsText = l10n.text(.notLoaded) }
-        if let latestCost { applyCost(latestCost, clearsScanNote: false) } else { costText = l10n.text(.notScanned); costSubtitle = "" }
+        if let latestDisplayedCost, let latestDisplayedCostRange {
+            applyDisplayedCost(latestDisplayedCost, range: latestDisplayedCostRange, clearsScanNote: false)
+        } else {
+            costText = l10n.text(.notScanned)
+            costSubtitle = ""
+        }
         if let latestSessionReport { applySessionReport(latestSessionReport) } else { sessionText = l10n.text(.notScanned) }
         applyRecentSessions(recentSessions)
     }
@@ -449,10 +459,10 @@ final class RunwayModel: ObservableObject {
                 await scanCost(quotaSnapshot, auth: auth)
                 lastError = nil
             } catch {
-                if latestCost != nil {
+                if latestDisplayedCost != nil {
                     noteCostScanFailure(error.localizedDescription)
                 } else {
-                    clearCost(l10n.text(.usageAnalyticsUnavailable))
+                    clearDisplayedCost(l10n.text(.usageAnalyticsUnavailable))
                     costLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
                 }
                 lastError = error.localizedDescription
@@ -462,6 +472,11 @@ final class RunwayModel: ObservableObject {
 
     func queryCost(range: ApiCostRange) async throws -> ApiEquivalentSummary {
         let now = Date()
+        let auth = try await loadValidAuth(preferCached: true)
+        return try await queryCost(range: range, auth: auth, now: now)
+    }
+
+    private func queryCost(range: ApiCostRange, auth: CodexAuth, now: Date) async throws -> ApiEquivalentSummary {
         do {
             let local = try await services.scanAPIEquivalent(range.window, now)
             if local.isDisplayableCost {
@@ -470,10 +485,18 @@ final class RunwayModel: ObservableObject {
         } catch {
             // Fall through to online analytics.
         }
-        let auth = try await loadValidAuth(preferCached: true)
-        let summary = try await services.fetchDailyWorkspaceUsage(auth, range.apiStartDate, range.apiEndDate, range.window, now)
-        guard summary.isDisplayableCost else { throw CostRangeQueryError.usageUnavailable }
-        return summary
+        do {
+            let summary = try await services.fetchDailyWorkspaceUsage(
+                auth,
+                range.apiStartDate,
+                range.apiEndDate,
+                range.window,
+                now)
+            guard summary.isDisplayableCost else { throw CostRangeQueryError.usageUnavailable }
+            return summary
+        } catch {
+            throw CostRangeQueryError.usageUnavailable
+        }
     }
 
     private func loadValidAuth(preferCached: Bool) async throws -> CodexAuth {
@@ -545,32 +568,45 @@ final class RunwayModel: ObservableObject {
     }
 
     private func scanCost(_ quota: QuotaSnapshot, auth: CodexAuth) async {
-        guard let secondary = quota.secondary,
-              let reset = secondary.resetsAt,
-              let minutes = secondary.windowMinutes
-        else {
-            if latestCost != nil {
-                noteCostScanFailure(l10n.text(.usageAnalyticsUnavailable))
-            } else {
-                clearCost(l10n.text(.usageAnalyticsUnavailable))
-            }
-            return
-        }
-        let window = DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
         let now = Date()
+        let range = settings.preferences.apiCostSummaryRange
+        let current = await scanCurrentCycleCost(quota, auth: auth, now: now)
+        if let current {
+            applyCurrentCost(current)
+        }
+
+        do {
+            let summary: ApiEquivalentSummary
+            switch range {
+            case .current:
+                guard let current else { throw CostRangeQueryError.usageUnavailable }
+                summary = current
+            case .previous:
+                guard let current else { throw CostRangeQueryError.usageUnavailable }
+                summary = try await queryCost(range: ApiCostRange.previousCycle(from: current), auth: auth, now: now)
+            case .today:
+                summary = try await queryCost(range: ApiCostRange.today(now: now), auth: auth, now: now)
+            case .thisMonth:
+                summary = try await queryCost(range: ApiCostRange.thisMonth(now: now), auth: auth, now: now)
+            }
+            applyDisplayedCost(summary, range: range, now: now)
+        } catch {
+            let text = costQueryErrorText(error)
+            if latestDisplayedCost != nil, latestDisplayedCostRange == range {
+                noteCostScanFailure(text)
+            } else {
+                clearDisplayedCost(text)
+            }
+        }
+    }
+
+    private func scanCurrentCycleCost(_ quota: QuotaSnapshot, auth: CodexAuth, now: Date) async -> ApiEquivalentSummary? {
+        guard let window = currentCycleWindow(from: quota) else { return nil }
         do {
             let local = try await services.scanAPIEquivalent(window, now)
-            if local.isDisplayableCost {
-                applyCost(local)
-                cacheCost(local)
-                return
-            }
+            if local.isDisplayableCost { return local }
         } catch {
-            if latestCost != nil {
-                noteCostScanFailure(error.localizedDescription)
-            } else {
-                costLines = [DetailLine(title: l10n.text(.costScanFailed), value: error.localizedDescription)]
-            }
+            // Fall through to online analytics.
         }
         do {
             let summary = try await services.fetchDailyWorkspaceUsage(
@@ -579,31 +615,33 @@ final class RunwayModel: ObservableObject {
                 Self.apiDateString(now.addingTimeInterval(86_400)),
                 window,
                 now)
-            if summary.isDisplayableCost {
-                applyCost(summary)
-                cacheCost(summary)
-            } else if latestCost != nil {
-                noteCostScanFailure(l10n.text(.usageAnalyticsUnavailable))
-            } else {
-                clearCost(l10n.text(.usageAnalyticsUnavailable))
-            }
+            return summary.isDisplayableCost ? summary : nil
         } catch {
-            if latestCost != nil {
-                noteCostScanFailure(error.localizedDescription)
-            } else {
-                clearCost(l10n.text(.usageAnalyticsUnavailable))
-                costLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
-            }
+            return nil
         }
     }
 
-    private func applyCost(_ summary: ApiEquivalentSummary, now: Date = Date(), clearsScanNote: Bool = true) {
-        if clearsScanNote { costScanNote = nil }
+    private func currentCycleWindow(from quota: QuotaSnapshot) -> DateInterval? {
+        guard let secondary = quota.secondary,
+              let reset = secondary.resetsAt,
+              let minutes = secondary.windowMinutes
+        else { return nil }
+        return DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
+    }
+
+    private func applyCurrentCost(_ summary: ApiEquivalentSummary) {
         latestCost = summary
         costDetail = summary
+        cacheCost(summary)
+    }
+
+    private func applyDisplayedCost(_ summary: ApiEquivalentSummary, range: ApiCostSummaryRange, now: Date = Date(), clearsScanNote: Bool = true) {
+        if clearsScanNote { costScanNote = nil }
+        latestDisplayedCost = summary
+        latestDisplayedCostRange = range
         let amount = summary.estimatedUSD.map(DurationFormatter.money) ?? "--"
         costText = "\(amount) \(l10n.text(.apiEquivalent)) · \(Self.compactNumber(summary.totals.totalTokens)) \(l10n.text(.tokens)) · \(sourceText(summary.source))"
-        costSubtitle = costSubtitle(for: summary, now: now)
+        costSubtitle = costSubtitle(for: summary, range: range, now: now)
         costLines = [
             DetailLine(title: l10n.text(.estimatedAPICost), value: amount),
             DetailLine(title: l10n.text(.tokens), value: Self.compactNumber(summary.totals.totalTokens)),
@@ -620,9 +658,9 @@ final class RunwayModel: ObservableObject {
         }
     }
 
-    private func clearCost(_ text: String) {
-        latestCost = nil
-        costDetail = nil
+    private func clearDisplayedCost(_ text: String) {
+        latestDisplayedCost = nil
+        latestDisplayedCostRange = nil
         costScanNote = nil
         costText = text
         costSubtitle = ""
@@ -635,15 +673,35 @@ final class RunwayModel: ObservableObject {
     }
 
     private func noteCostScanFailure(_ text: String) {
-        guard let latestCost else { return }
+        guard let latestDisplayedCost, let latestDisplayedCostRange else { return }
         costScanNote = text
-        applyCost(latestCost, clearsScanNote: false)
+        applyDisplayedCost(latestDisplayedCost, range: latestDisplayedCostRange, clearsScanNote: false)
     }
 
-    private func costSubtitle(for summary: ApiEquivalentSummary, now: Date) -> String {
+    private func costQueryErrorText(_ error: Error) -> String {
+        if error is CostRangeQueryError {
+            return l10n.text(.usageAnalyticsUnavailable)
+        }
+        return error.localizedDescription
+    }
+
+    private func costSubtitle(for summary: ApiEquivalentSummary, range: ApiCostSummaryRange, now: Date) -> String {
         let pricing = summary.confidence == .tokensOnly ? l10n.text(.tokensOnly) : l10n.text(.apiTokenPricing)
         let calculated = DurationFormatter.relativePast(since: summary.calculatedAt, now: now, language: l10n.language)
-        return "\(l10n.text(.weeklyUsage)) · \(pricing) · \(summary.totals.turns) \(l10n.text(.turns)) · \(l10n.text(.calculatedAt)) \(calculated)"
+        return "\(costRangeText(range)) · \(pricing) · \(summary.totals.turns) \(l10n.text(.turns)) · \(l10n.text(.calculatedAt)) \(calculated)"
+    }
+
+    private func costRangeText(_ range: ApiCostSummaryRange) -> String {
+        switch range {
+        case .today:
+            return l10n.text(.today)
+        case .current:
+            return l10n.text(.currentCycle)
+        case .previous:
+            return l10n.text(.previousCycle)
+        case .thisMonth:
+            return l10n.text(.thisMonth)
+        }
     }
 
     private func windowText(_ window: RateWindow, now: Date) -> String {

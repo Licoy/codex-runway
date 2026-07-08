@@ -2,6 +2,7 @@ import Foundation
 
 public enum L10nKey: String, CaseIterable, Sendable {
     case apiCost
+    case apiCostSummaryRange
     case apiCostSource
     case apiEquivalent
     case apiTokenPricing

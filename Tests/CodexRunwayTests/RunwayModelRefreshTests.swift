@@ -70,6 +70,102 @@ struct RunwayModelRefreshTests {
         #expect(costStart < resetFinish)
     }
 
+    @Test("default API cost summary scans today's range")
+    func defaultAPICostSummaryScansToday() async throws {
+        let recorder = CostRangeRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        settings.updateShowsCostSummary(true)
+        let services = Self.costRangeServices(recorder: recorder)
+        let model = RunwayModel(settings: settings, services: services)
+
+        model.refreshCost()
+
+        let captured = try await recorder.waitForWindow(count: 2)
+        let calendar = Calendar.autoupdatingCurrent
+        #expect(captured.window.start == calendar.startOfDay(for: captured.now))
+        #expect(captured.window.end == captured.now)
+    }
+
+    @Test("current cycle API cost summary scans the quota weekly range")
+    func currentCycleAPICostSummaryScansQuotaWindow() async throws {
+        let recorder = CostRangeRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        settings.updateApiCostSummaryRange(.current)
+        let quota = Self.quotaSnapshot()
+        let services = Self.costRangeServices(quota: quota, recorder: recorder)
+        let model = RunwayModel(settings: settings, services: services)
+
+        model.refreshCost()
+
+        let captured = try await recorder.waitForWindow()
+        let secondary = try #require(quota.secondary)
+        let reset = try #require(secondary.resetsAt)
+        let minutes = try #require(secondary.windowMinutes)
+        #expect(captured.window.start == reset.addingTimeInterval(-TimeInterval(minutes * 60)))
+        #expect(captured.window.end == reset)
+    }
+
+    @Test("API cost summary hides bad analytics response for unavailable selected range")
+    func apiCostSummaryHidesBadAnalyticsResponseForUnavailableRange() async throws {
+        let recorder = CostRangeRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        settings.updateShowsCostSummary(true)
+        settings.updateApiCostSummaryRange(.current)
+        let quota = Self.quotaSnapshot()
+        let secondary = try #require(quota.secondary)
+        let reset = try #require(secondary.resetsAt)
+        let minutes = try #require(secondary.windowMinutes)
+        let currentWindow = DateInterval(start: reset.addingTimeInterval(-TimeInterval(minutes * 60)), end: reset)
+        let services = RunwayModelServices(
+            loadValidAuth: { _, _ in Self.auth() },
+            fetchQuota: { _ in quota },
+            fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
+            scanAPIEquivalent: { window, now in
+                await recorder.record(window: window, now: now)
+                if window == currentWindow {
+                    return Self.costSummary(window: window, calculatedAt: now)
+                }
+                return ApiEquivalentSummary.unavailable(window: window, calculatedAt: now)
+            },
+            fetchDailyWorkspaceUsage: { _, _, _, _, _ in
+                throw URLError(.badServerResponse)
+            },
+            dryRunSessions: {
+                SessionRepairReport(
+                    missingIndexIDs: [],
+                    orphanIndexIDs: [],
+                    duplicateIndexIDs: [],
+                    staleTitleIDs: [],
+                    backupPath: nil,
+                    plannedEntries: 0)
+            },
+            scanRecentSessions: { _ in SessionActivitySummary(items: []) })
+        let model = RunwayModel(settings: settings, services: services)
+
+        model.refreshCost()
+        _ = try await recorder.waitForWindow()
+        for _ in 0..<100 {
+            if model.costText.contains("$1") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        settings.updateApiCostSummaryRange(.today)
+        model.refreshCost()
+        _ = try await recorder.waitForWindow(count: 3)
+        let unavailable = settings.l10n.text(.usageAnalyticsUnavailable)
+        for _ in 0..<100 {
+            if model.costText == unavailable { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let lineText = model.costLines.map(\.value).joined(separator: " ")
+        #expect(model.costText == unavailable)
+        #expect(model.costScanNote == nil)
+        #expect(!model.costText.contains("$1"))
+        #expect(!lineText.contains("NSURLErrorDomain"))
+        #expect(!lineText.contains("-1011"))
+    }
+
     private func scopedDefaults() -> UserDefaults {
         let suite = "codex-runway-refresh-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -95,6 +191,33 @@ struct RunwayModelRefreshTests {
             lastRefresh: nil)
     }
 
+    nonisolated private static func costRangeServices(
+        quota: QuotaSnapshot = quotaSnapshot(),
+        recorder: CostRangeRecorder) -> RunwayModelServices
+    {
+        RunwayModelServices(
+            loadValidAuth: { _, _ in Self.auth() },
+            fetchQuota: { _ in quota },
+            fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
+            scanAPIEquivalent: { window, now in
+                await recorder.record(window: window, now: now)
+                return Self.costSummary(window: window, calculatedAt: now)
+            },
+            fetchDailyWorkspaceUsage: { _, _, _, window, now in
+                Self.costSummary(window: window, calculatedAt: now)
+            },
+            dryRunSessions: {
+                SessionRepairReport(
+                    missingIndexIDs: [],
+                    orphanIndexIDs: [],
+                    duplicateIndexIDs: [],
+                    staleTitleIDs: [],
+                    backupPath: nil,
+                    plannedEntries: 0)
+            },
+            scanRecentSessions: { _ in SessionActivitySummary(items: []) })
+    }
+
     nonisolated private static func costSummary(window: DateInterval, calculatedAt: Date) -> ApiEquivalentSummary {
         ApiEquivalentSummary(
             source: .localSessions,
@@ -115,6 +238,23 @@ struct RunwayModelRefreshTests {
             warnings: [],
             pricingVersion: "test",
             calculatedAt: calculatedAt)
+    }
+}
+
+private actor CostRangeRecorder {
+    private var captures: [(window: DateInterval, now: Date)] = []
+
+    func record(window: DateInterval, now: Date) {
+        captures.append((window, now))
+    }
+
+    func waitForWindow(count: Int = 1) async throws -> (window: DateInterval, now: Date) {
+        for _ in 0..<100 {
+            if captures.count >= count, let captured = captures.last { return captured }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("Timed out waiting for API cost range")
+        throw CancellationError()
     }
 }
 

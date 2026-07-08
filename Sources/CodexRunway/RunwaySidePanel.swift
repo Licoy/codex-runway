@@ -33,6 +33,7 @@ struct DetailPageView: View {
     var page: RunwaySidePanel
     @ObservedObject var model: RunwayModel
     var l10n: L10n
+    var apiCostInitialRange: ApiCostSummaryRange = .today
 
     var body: some View {
         switch page {
@@ -44,7 +45,7 @@ struct DetailPageView: View {
                     l10n: l10n)
             }
         case .apiCost:
-            ApiCostDetailView(model: model, l10n: l10n)
+            ApiCostDetailView(model: model, l10n: l10n, initialRange: apiCostInitialRange)
         }
     }
 }

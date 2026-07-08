@@ -41,6 +41,13 @@ public enum StatusBarBatteryDetailStyle: String, CaseIterable, Codable, Sendable
     case remainingPercent
 }
 
+public enum ApiCostSummaryRange: String, CaseIterable, Codable, Sendable {
+    case today
+    case current
+    case previous
+    case thisMonth
+}
+
 public struct RunwayPreferences: Codable, Sendable, Equatable {
     public var language: LanguagePreference
     public var appearance: AppearancePreference
@@ -49,6 +56,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
     public var statusBarBatteryScope: StatusBarBatteryScope
     public var statusBarBatteryDetailStyle: StatusBarBatteryDetailStyle
     public var refreshIntervalSeconds: Int
+    public var apiCostSummaryRange: ApiCostSummaryRange
     public var showsCostSummary: Bool
     public var showsRecentSessions: Bool
     public var showsSessionRepairSummary: Bool
@@ -65,6 +73,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         statusBarBatteryScope: StatusBarBatteryScope = .fiveHour,
         statusBarBatteryDetailStyle: StatusBarBatteryDetailStyle = .countdown,
         refreshIntervalSeconds: Int = 300,
+        apiCostSummaryRange: ApiCostSummaryRange = .today,
         showsCostSummary: Bool = true,
         showsRecentSessions: Bool = false,
         showsSessionRepairSummary: Bool = true,
@@ -80,6 +89,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         self.statusBarBatteryScope = statusBarBatteryScope
         self.statusBarBatteryDetailStyle = statusBarBatteryDetailStyle
         self.refreshIntervalSeconds = refreshIntervalSeconds
+        self.apiCostSummaryRange = apiCostSummaryRange
         self.showsCostSummary = showsCostSummary
         self.showsRecentSessions = showsRecentSessions
         self.showsSessionRepairSummary = showsSessionRepairSummary
@@ -97,6 +107,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         case statusBarBatteryScope
         case statusBarBatteryDetailStyle
         case refreshIntervalSeconds
+        case apiCostSummaryRange
         case showsCostSummary
         case showsRecentSessions
         case showsSessionRepairSummary
@@ -115,6 +126,7 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         statusBarBatteryScope = try container.decodeIfPresent(StatusBarBatteryScope.self, forKey: .statusBarBatteryScope) ?? .fiveHour
         statusBarBatteryDetailStyle = try container.decodeIfPresent(StatusBarBatteryDetailStyle.self, forKey: .statusBarBatteryDetailStyle) ?? .countdown
         refreshIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .refreshIntervalSeconds) ?? 300
+        apiCostSummaryRange = try container.decodeIfPresent(ApiCostSummaryRange.self, forKey: .apiCostSummaryRange) ?? .today
         showsCostSummary = try container.decodeIfPresent(Bool.self, forKey: .showsCostSummary) ?? true
         showsRecentSessions = try container.decodeIfPresent(Bool.self, forKey: .showsRecentSessions) ?? false
         showsSessionRepairSummary = try container.decodeIfPresent(Bool.self, forKey: .showsSessionRepairSummary) ?? true

@@ -11,6 +11,7 @@ struct RunwayPopoverView: View {
 
     @State private var confirmRepair = false
     @State private var detailPage: RunwaySidePanel?
+    @State private var apiCostDetailRange = ApiCostSummaryRange.today
     private var l10n: L10n { settings.l10n }
 
     var body: some View {
@@ -18,7 +19,7 @@ struct RunwayPopoverView: View {
             detailPage == nil ? AnyView(header) : AnyView(detailHeader)
             Divider()
             if let detailPage {
-                DetailPageView(page: detailPage, model: model, l10n: l10n)
+                DetailPageView(page: detailPage, model: model, l10n: l10n, apiCostInitialRange: apiCostDetailRange)
             } else {
                 mainContent
                 if let error = model.lastError {
@@ -60,7 +61,10 @@ struct RunwayPopoverView: View {
                         l10n: l10n,
                         isRefreshing: model.isRefreshing(.apiCost),
                         onRefresh: { model.refreshCost() },
-                        onDetailsSelect: { detailPage = .apiCost })
+                        onDetailsSelect: {
+                            apiCostDetailRange = settings.preferences.apiCostSummaryRange
+                            detailPage = .apiCost
+                        })
                 }
                 if settings.preferences.showsSessionRepairSummary {
                     sessionSummary

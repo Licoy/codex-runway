@@ -1,6 +1,7 @@
 extension L10n {
     static let en: [L10nKey: String] = [
         .apiCost: "API Equivalent Cost",
+        .apiCostSummaryRange: "API cost range",
         .apiCostSource: "Cost source",
         .apiEquivalent: "API equivalent",
         .apiTokenPricing: "API token pricing",
@@ -216,6 +217,7 @@ extension L10n {
 
     static let zhHans: [L10nKey: String] = [
         .apiCost: "API 等价成本",
+        .apiCostSummaryRange: "API 成本范围",
         .apiCostSource: "成本来源",
         .apiEquivalent: "API 等价",
         .apiTokenPricing: "API token 价格",

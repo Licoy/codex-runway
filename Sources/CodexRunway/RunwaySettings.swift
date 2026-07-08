@@ -57,6 +57,10 @@ final class RunwaySettings: ObservableObject {
         update { $0.refreshIntervalSeconds = max(60, min(1_800, seconds)) }
     }
 
+    func updateApiCostSummaryRange(_ range: ApiCostSummaryRange) {
+        update { $0.apiCostSummaryRange = range }
+    }
+
     func updateShowsCostSummary(_ isShown: Bool) {
         update { $0.showsCostSummary = isShown }
     }

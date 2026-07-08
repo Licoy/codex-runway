@@ -127,6 +127,14 @@ struct ControlPanelView: View {
                     title: l10n.text(.showCostSummary),
                     subtitle: l10n.text(.apiEquivalent),
                     binding: costSummaryBinding)
+                PickerRow(title: l10n.text(.apiCostSummaryRange), subtitle: l10n.text(.apiEquivalent)) {
+                    Picker(l10n.text(.apiCostSummaryRange), selection: apiCostSummaryRangeBinding) {
+                        ForEach(ApiCostSummaryRange.allCases, id: \.self) { range in
+                            Text(range.title(l10n)).tag(range)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
                 PreferenceToggleRow(
                     title: l10n.text(.showRecentSessions),
                     subtitle: l10n.text(.recentSessionsDescription),
@@ -242,6 +250,15 @@ struct ControlPanelView: View {
         Binding(get: { settings.preferences.showsCostSummary }, set: { settings.updateShowsCostSummary($0) })
     }
 
+    private var apiCostSummaryRangeBinding: Binding<ApiCostSummaryRange> {
+        Binding(
+            get: { settings.preferences.apiCostSummaryRange },
+            set: {
+                settings.updateApiCostSummaryRange($0)
+                model.refreshCost()
+            })
+    }
+
     private var notificationMessageBinding: Binding<Bool> {
         Binding(
             get: { notificationMessage != nil },
@@ -341,6 +358,17 @@ private extension StatusBarBatteryDetailStyle {
         switch self {
         case .countdown: l10n.text(.statusBarBatteryDetailCountdown)
         case .remainingPercent: l10n.text(.statusBarBatteryDetailRemainingPercent)
+        }
+    }
+}
+
+private extension ApiCostSummaryRange {
+    func title(_ l10n: L10n) -> String {
+        switch self {
+        case .today: l10n.text(.today)
+        case .current: l10n.text(.currentCycle)
+        case .previous: l10n.text(.previousCycle)
+        case .thisMonth: l10n.text(.thisMonth)
         }
     }
 }
