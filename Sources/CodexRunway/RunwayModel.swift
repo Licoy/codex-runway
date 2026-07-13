@@ -521,12 +521,13 @@ final class RunwayModel: ObservableObject {
         accountDisplay = CodexAccountDisplay.make(auth: latestAuth, quotaPlan: quota.plan)
         statusText = menuBarText(for: quota, now: quota.updatedAt)
         let unknown = l10n.text(.unknown)
+        let primaryTitle = quotaWindowTitle(quota.primary)
         let secondary = quota.secondary.map { "\(l10n.text(.weeklyUsage)) \($0.usedPercent)%" } ?? "\(l10n.text(.weeklyUsage)) n/a"
-        quotaText = "\(l10n.text(.plan)) \(quota.plan ?? unknown) · \(l10n.text(.fiveHourUsage)) \(quota.primary.usedPercent)% · \(secondary)"
+        quotaText = "\(l10n.text(.plan)) \(quota.plan ?? unknown) · \(primaryTitle) \(quota.primary.usedPercent)% · \(secondary)"
         quotaMeters = quotaMeters(from: quota)
         quotaLines = [
             DetailLine(title: l10n.text(.plan), value: quota.plan ?? unknown),
-            DetailLine(title: l10n.text(.fiveHourUsage), value: windowText(quota.primary, now: quota.updatedAt)),
+            DetailLine(title: primaryTitle, value: windowText(quota.primary, now: quota.updatedAt)),
         ]
         if let secondary = quota.secondary {
             quotaLines.append(DetailLine(title: l10n.text(.weeklyUsage), value: windowText(secondary, now: quota.updatedAt)))
@@ -722,7 +723,7 @@ final class RunwayModel: ObservableObject {
 
     private func quotaMeters(from quota: QuotaSnapshot) -> [QuotaMeter] {
         var meters = [
-            QuotaMeter(title: l10n.text(.fiveHourUsage), window: quota.primary, now: quota.updatedAt, markerPercents: [20, 50, 80]),
+            QuotaMeter(title: quotaWindowTitle(quota.primary), window: quota.primary, now: quota.updatedAt, markerPercents: [20, 50, 80]),
         ]
         if let secondary = quota.secondary {
             meters.append(QuotaMeter(title: l10n.text(.weeklyUsage), window: secondary, now: quota.updatedAt, markerPercents: [20, 50, 80]))
@@ -731,6 +732,17 @@ final class RunwayModel: ObservableObject {
             QuotaMeter(title: $0.name, window: $0.window, now: quota.updatedAt, markerPercents: [20, 50, 80])
         })
         return meters
+    }
+
+    private func quotaWindowTitle(_ window: RateWindow) -> String {
+        switch window.windowMinutes {
+        case 300:
+            return l10n.text(.fiveHourUsage)
+        case 10_080:
+            return l10n.text(.weeklyUsage)
+        default:
+            return l10n.text(.quota)
+        }
     }
 
     private func localizedStatus(_ status: String) -> String {

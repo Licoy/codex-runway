@@ -187,6 +187,36 @@ struct RunwayModelRefreshTests {
         #expect(!lineText.contains("-1011"))
     }
 
+    @Test("quota labels follow the primary window duration")
+    func quotaLabelsFollowPrimaryWindowDuration() async throws {
+        let weekly = Self.quotaSnapshot(primaryMinutes: 10_080)
+        let weeklySettings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        let weeklyModel = RunwayModel(
+            settings: weeklySettings,
+            services: Self.costRangeServices(quota: weekly, recorder: CostRangeRecorder()))
+
+        weeklyModel.refreshQuota()
+        try await waitForQuota(in: weeklyModel)
+
+        #expect(weeklyModel.quotaText.contains(weeklySettings.l10n.text(.weeklyUsage)))
+        #expect(!weeklyModel.quotaText.contains(weeklySettings.l10n.text(.fiveHourUsage)))
+        #expect(weeklyModel.quotaLines[1].title == weeklySettings.l10n.text(.weeklyUsage))
+        #expect(weeklyModel.quotaMeters.first?.title == weeklySettings.l10n.text(.weeklyUsage))
+
+        let fiveHour = Self.quotaSnapshot(primaryMinutes: 300)
+        let fiveHourSettings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        let fiveHourModel = RunwayModel(
+            settings: fiveHourSettings,
+            services: Self.costRangeServices(quota: fiveHour, recorder: CostRangeRecorder()))
+
+        fiveHourModel.refreshQuota()
+        try await waitForQuota(in: fiveHourModel)
+
+        #expect(fiveHourModel.quotaText.contains(fiveHourSettings.l10n.text(.fiveHourUsage)))
+        #expect(fiveHourModel.quotaLines[1].title == fiveHourSettings.l10n.text(.fiveHourUsage))
+        #expect(fiveHourModel.quotaMeters.first?.title == fiveHourSettings.l10n.text(.fiveHourUsage))
+    }
+
     private func scopedDefaults() -> UserDefaults {
         let suite = "codex-runway-refresh-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -194,11 +224,19 @@ struct RunwayModelRefreshTests {
         return defaults
     }
 
-    nonisolated private static func quotaSnapshot(secondaryReset: Date? = nil) -> QuotaSnapshot {
+    private func waitForQuota(in model: RunwayModel) async throws {
+        for _ in 0..<100 {
+            if !model.quotaMeters.isEmpty { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for quota refresh")
+    }
+
+    nonisolated private static func quotaSnapshot(primaryMinutes: Int = 300, secondaryReset: Date? = nil) -> QuotaSnapshot {
         let now = Date(timeIntervalSince1970: 1_782_710_000)
         return QuotaSnapshot(
             plan: "pro",
-            primary: RateWindow(usedPercent: 20, windowMinutes: 300, resetsAt: now.addingTimeInterval(3_600)),
+            primary: RateWindow(usedPercent: 20, windowMinutes: primaryMinutes, resetsAt: now.addingTimeInterval(3_600)),
             secondary: RateWindow(usedPercent: 30, windowMinutes: 10_080, resetsAt: secondaryReset ?? now.addingTimeInterval(10_080 * 60)),
             additionalWindows: [],
             creditsBalance: nil,
