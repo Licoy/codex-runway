@@ -1,5 +1,21 @@
 import Foundation
 
+struct UsageCostScanDiagnostics: Equatable, Sendable {
+    var bytesRead = 0
+    var candidateLines = 0
+    var decodedLines = 0
+    var maxBufferedBytes = 0
+    var candidateFiles = 0
+    var cacheHits = 0
+    var rebuiltFiles = 0
+    var maxConcurrentScans = 0
+}
+
+struct UsageCostScanReport<Summary> {
+    var summary: Summary
+    var diagnostics: UsageCostScanDiagnostics
+}
+
 public struct UsageCostScanner: Sendable {
     public var codexHome: URL
 
@@ -8,10 +24,21 @@ public struct UsageCostScanner: Sendable {
     }
 
     public func scan(window: DateInterval) throws -> UsageCostSummary {
+        try scanReport(window: window).summary
+    }
+
+    func scanReport(window: DateInterval) throws -> UsageCostScanReport<UsageCostSummary> {
         var byModel: [String: TokenUsage] = [:]
         var unknown = Set<String>()
-        for file in jsonlFiles(window: window) {
-            try scan(file: file, window: window, byModel: &byModel, unknown: &unknown)
+        let files = jsonlFiles(window: window)
+        var diagnostics = UsageCostScanDiagnostics(candidateFiles: files.count)
+        for file in files {
+            try scan(
+                file: file,
+                window: window,
+                byModel: &byModel,
+                unknown: &unknown,
+                diagnostics: &diagnostics)
         }
         let breakdown = byModel.keys.sorted().map { model in
             let usage = byModel[model] ?? .zero
@@ -19,22 +46,33 @@ public struct UsageCostScanner: Sendable {
             if cost == nil { unknown.insert(model) }
             return ModelCostBreakdown(model: model, usage: usage, estimatedUSD: cost ?? 0)
         }
-        return UsageCostSummary(
-            window: window,
-            totals: byModel.values.reduce(.zero, +),
-            modelBreakdown: breakdown,
-            estimatedUSD: breakdown.reduce(Decimal(0)) { $0 + $1.estimatedUSD },
-            pricingVersion: PricingTable.version,
-            unknownModels: unknown.sorted())
+        return UsageCostScanReport(
+            summary: UsageCostSummary(
+                window: window,
+                totals: byModel.values.reduce(.zero, +),
+                modelBreakdown: breakdown,
+                estimatedUSD: breakdown.reduce(Decimal(0)) { $0 + $1.estimatedUSD },
+                pricingVersion: PricingTable.version,
+                unknownModels: unknown.sorted()),
+            diagnostics: diagnostics)
     }
 
     public func scanAPIEquivalent(window: DateInterval, calculatedAt: Date = Date()) throws -> ApiEquivalentSummary {
+        try scanAPIEquivalentReport(window: window, calculatedAt: calculatedAt).summary
+    }
+
+    func scanAPIEquivalentReport(
+        window: DateInterval,
+        calculatedAt: Date = Date()) throws -> UsageCostScanReport<ApiEquivalentSummary>
+    {
         var byModel: [String: ApiEquivalentTotals] = [:]
         var byProject: [String: ApiEquivalentTotals] = [:]
         var byDay: [String: ApiEquivalentTotals] = [:]
         var byDayModel: [String: [String: ApiEquivalentTotals]] = [:]
         var unknown = Set<String>()
-        for file in jsonlFiles(window: window) {
+        let files = jsonlFiles(window: window)
+        var diagnostics = UsageCostScanDiagnostics(candidateFiles: files.count)
+        for file in files {
             try scanAPIEquivalent(
                 file: file,
                 window: window,
@@ -42,7 +80,8 @@ public struct UsageCostScanner: Sendable {
                 byProject: &byProject,
                 byDay: &byDay,
                 byDayModel: &byDayModel,
-                unknown: &unknown)
+                unknown: &unknown,
+                diagnostics: &diagnostics)
         }
         let modelRows = byModel.keys.sorted().map { model in
             let totals = byModel[model] ?? .zero
@@ -70,34 +109,39 @@ public struct UsageCostScanner: Sendable {
                 rawCredits: 0)
         }
         let totals = byDay.values.reduce(.zero, +)
-        return ApiEquivalentSummary(
-            source: totals.totalTokens > 0 ? .localSessions : .unavailable,
-            confidence: totals.totalTokens > 0 ? .priced : .unavailable,
-            window: window,
-            estimatedUSD: modelRows.compactMap(\.estimatedUSD).reduce(Decimal(0), +),
-            totals: totals,
-            dailyRows: dailyRows,
-            modelRows: modelRows,
-            projectRows: projectRows,
-            clientRows: [],
-            rawCredits: 0,
-            warnings: unknown.sorted().map { "unknown-model:\($0)" },
-            pricingVersion: PricingTable.version,
-            calculatedAt: calculatedAt)
+        return UsageCostScanReport(
+            summary: ApiEquivalentSummary(
+                source: totals.totalTokens > 0 ? .localSessions : .unavailable,
+                confidence: totals.totalTokens > 0 ? .priced : .unavailable,
+                window: window,
+                estimatedUSD: modelRows.compactMap(\.estimatedUSD).reduce(Decimal(0), +),
+                totals: totals,
+                dailyRows: dailyRows,
+                modelRows: modelRows,
+                projectRows: projectRows,
+                clientRows: [],
+                rawCredits: 0,
+                warnings: unknown.sorted().map { "unknown-model:\($0)" },
+                pricingVersion: PricingTable.version,
+                calculatedAt: calculatedAt),
+            diagnostics: diagnostics)
     }
 
     private func scan(
         file: URL,
         window: DateInterval,
         byModel: inout [String: TokenUsage],
-        unknown: inout Set<String>) throws
+        unknown: inout Set<String>,
+        diagnostics: inout UsageCostScanDiagnostics) throws
     {
         let text = try String(contentsOf: file)
+        recordRead(of: file, fallbackBytes: text.utf8.count, diagnostics: &diagnostics)
         var currentModel = "unknown-model"
         for line in text.split(separator: "\n") {
-            guard let record = try? JSONLineRecord.parse(String(line)),
-                  window.contains(record.timestamp)
-            else { continue }
+            diagnostics.candidateLines += 1
+            guard let record = try? JSONLineRecord.parse(String(line)) else { continue }
+            diagnostics.decodedLines += 1
+            guard window.contains(record.timestamp) else { continue }
             if let contextModel = record.contextModel {
                 currentModel = contextModel
             }
@@ -115,13 +159,17 @@ public struct UsageCostScanner: Sendable {
         byProject: inout [String: ApiEquivalentTotals],
         byDay: inout [String: ApiEquivalentTotals],
         byDayModel: inout [String: [String: ApiEquivalentTotals]],
-        unknown: inout Set<String>) throws
+        unknown: inout Set<String>,
+        diagnostics: inout UsageCostScanDiagnostics) throws
     {
         let text = try String(contentsOf: file)
+        recordRead(of: file, fallbackBytes: text.utf8.count, diagnostics: &diagnostics)
         var currentModel = "unknown-model"
         var currentProject = SessionProjectName.unknown
         for line in text.split(separator: "\n") {
+            diagnostics.candidateLines += 1
             guard let record = try? JSONLineRecord.parse(String(line)) else { continue }
+            diagnostics.decodedLines += 1
             if let cwd = record.sessionCWD {
                 currentProject = SessionProjectName.displayName(for: cwd)
             }
@@ -139,6 +187,16 @@ public struct UsageCostScanner: Sendable {
             byDayModel[day, default: [:]][model, default: .zero] = byDayModel[day, default: [:]][model, default: .zero] + totals
             if PricingTable.price(for: model) == nil { unknown.insert(model) }
         }
+    }
+
+    private func recordRead(
+        of file: URL,
+        fallbackBytes: @autoclosure () -> Int,
+        diagnostics: inout UsageCostScanDiagnostics)
+    {
+        let bytes = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? fallbackBytes()
+        diagnostics.bytesRead += bytes
+        diagnostics.maxBufferedBytes = max(diagnostics.maxBufferedBytes, bytes)
     }
 
     private func jsonlFiles(window: DateInterval) -> [URL] {

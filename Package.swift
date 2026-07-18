@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "CodexRunway", targets: ["CodexRunway"]),
+        .executable(name: "CodexRunwayCostBenchmark", targets: ["CodexRunwayCostBenchmark"]),
         .library(name: "CodexRunwayCore", targets: ["CodexRunwayCore"]),
     ],
     dependencies: [
@@ -24,6 +25,9 @@ let package = Package(
                 .product(name: "MijickCalendarView", package: "CalendarView"),
                 .product(name: "Sparkle", package: "Sparkle"),
             ]),
+        .executableTarget(
+            name: "CodexRunwayCostBenchmark",
+            dependencies: ["CodexRunwayCore"]),
         .testTarget(
             name: "CodexRunwayCoreTests",
             dependencies: ["CodexRunwayCore"]),

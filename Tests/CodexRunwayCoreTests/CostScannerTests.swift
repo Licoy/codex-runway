@@ -64,6 +64,40 @@ struct CostScannerTests {
             window: window) == false)
     }
 
+    @Test("API equivalent report exposes deterministic scan diagnostics")
+    func apiEquivalentReportDiagnostics() throws {
+        let root = try TemporaryDirectory()
+        let sessions = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        let archived = root.url.appending(path: "archived_sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archived, withIntermediateDirectories: true)
+
+        let firstContents = """
+        {"timestamp":"2026-06-29T00:00:00Z","type":"turn_context","payload":{"model":"gpt-5.5"}}
+        not-json
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":0}}}}
+        """
+        let secondContents = """
+        {"timestamp":"2026-06-29T00:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":0}}},"turn_context":{"model":"gpt-5.5"}}
+        """
+        try firstContents.write(
+            to: sessions.appending(path: "rollout-first.jsonl"), atomically: true, encoding: .utf8)
+        try secondContents.write(
+            to: archived.appending(path: "rollout-second.jsonl"), atomically: true, encoding: .utf8)
+
+        let report = try UsageCostScanner(codexHome: root.url).scanAPIEquivalentReport(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(report.summary.totals.turns == 2)
+        #expect(report.diagnostics.bytesRead == firstContents.utf8.count + secondContents.utf8.count)
+        #expect(report.diagnostics.candidateLines == 4)
+        #expect(report.diagnostics.decodedLines == 3)
+        #expect(report.diagnostics.maxBufferedBytes == max(firstContents.utf8.count, secondContents.utf8.count))
+        #expect(report.diagnostics.candidateFiles == 2)
+    }
+
     @Test("local API equivalent scans the weekly window and falls back for unknown models")
     func localAPIEquivalentUsesWeeklyWindow() throws {
         let root = try TemporaryDirectory()
