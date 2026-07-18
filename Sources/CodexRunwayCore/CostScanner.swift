@@ -9,6 +9,8 @@ struct UsageCostScanDiagnostics: Equatable, Sendable {
     var cacheHits = 0
     var rebuiltFiles = 0
     var maxConcurrentScans = 0
+    var malformedCandidateLines = 0
+    var oversizedLines = 0
 }
 
 struct UsageCostScanReport<Summary> {
@@ -31,6 +33,7 @@ public struct UsageCostScanner: Sendable {
         var byModel: [String: TokenUsage] = [:]
         var unknown = Set<String>()
         let files = jsonlFiles(window: window)
+        let stream = UsageCostLogStream()
         var diagnostics = UsageCostScanDiagnostics(candidateFiles: files.count)
         for file in files {
             try scan(
@@ -38,6 +41,7 @@ public struct UsageCostScanner: Sendable {
                 window: window,
                 byModel: &byModel,
                 unknown: &unknown,
+                stream: stream,
                 diagnostics: &diagnostics)
         }
         let breakdown = byModel.keys.sorted().map { model in
@@ -71,6 +75,7 @@ public struct UsageCostScanner: Sendable {
         var byDayModel: [String: [String: ApiEquivalentTotals]] = [:]
         var unknown = Set<String>()
         let files = jsonlFiles(window: window)
+        let stream = UsageCostLogStream()
         var diagnostics = UsageCostScanDiagnostics(candidateFiles: files.count)
         for file in files {
             try scanAPIEquivalent(
@@ -81,6 +86,7 @@ public struct UsageCostScanner: Sendable {
                 byDay: &byDay,
                 byDayModel: &byDayModel,
                 unknown: &unknown,
+                stream: stream,
                 diagnostics: &diagnostics)
         }
         let modelRows = byModel.keys.sorted().map { model in
@@ -109,6 +115,10 @@ public struct UsageCostScanner: Sendable {
                 rawCredits: 0)
         }
         let totals = byDay.values.reduce(.zero, +)
+        var warnings = unknown.sorted().map { "unknown-model:\($0)" }
+        if diagnostics.oversizedLines > 0 {
+            warnings.append("oversized-jsonl-lines:\(diagnostics.oversizedLines)")
+        }
         return UsageCostScanReport(
             summary: ApiEquivalentSummary(
                 source: totals.totalTokens > 0 ? .localSessions : .unavailable,
@@ -121,7 +131,7 @@ public struct UsageCostScanner: Sendable {
                 projectRows: projectRows,
                 clientRows: [],
                 rawCredits: 0,
-                warnings: unknown.sorted().map { "unknown-model:\($0)" },
+                warnings: warnings,
                 pricingVersion: PricingTable.version,
                 calculatedAt: calculatedAt),
             diagnostics: diagnostics)
@@ -132,24 +142,22 @@ public struct UsageCostScanner: Sendable {
         window: DateInterval,
         byModel: inout [String: TokenUsage],
         unknown: inout Set<String>,
+        stream: UsageCostLogStream,
         diagnostics: inout UsageCostScanDiagnostics) throws
     {
-        let text = try String(contentsOf: file)
-        recordRead(of: file, fallbackBytes: text.utf8.count, diagnostics: &diagnostics)
         var currentModel = "unknown-model"
-        for line in text.split(separator: "\n") {
-            diagnostics.candidateLines += 1
-            guard let record = try? JSONLineRecord.parse(String(line)) else { continue }
-            diagnostics.decodedLines += 1
-            guard window.contains(record.timestamp) else { continue }
+        let result = try stream.read(file: file) { line in
+            let record = line.record
             if let contextModel = record.contextModel {
                 currentModel = contextModel
             }
-            guard let usage = record.lastTokenUsage else { continue }
+            guard window.contains(record.timestamp) else { return }
+            guard let usage = record.lastTokenUsage else { return }
             let model = record.model ?? currentModel
             byModel[model, default: .zero] = byModel[model, default: .zero] + usage
             if PricingTable.price(for: model) == nil { unknown.insert(model) }
         }
+        record(result: result, diagnostics: &diagnostics)
     }
 
     private func scanAPIEquivalent(
@@ -160,43 +168,43 @@ public struct UsageCostScanner: Sendable {
         byDay: inout [String: ApiEquivalentTotals],
         byDayModel: inout [String: [String: ApiEquivalentTotals]],
         unknown: inout Set<String>,
+        stream: UsageCostLogStream,
         diagnostics: inout UsageCostScanDiagnostics) throws
     {
-        let text = try String(contentsOf: file)
-        recordRead(of: file, fallbackBytes: text.utf8.count, diagnostics: &diagnostics)
         var currentModel = "unknown-model"
         var currentProject = SessionProjectName.unknown
-        for line in text.split(separator: "\n") {
-            diagnostics.candidateLines += 1
-            guard let record = try? JSONLineRecord.parse(String(line)) else { continue }
-            diagnostics.decodedLines += 1
+        let result = try stream.read(file: file) { line in
+            let record = line.record
             if let cwd = record.sessionCWD {
                 currentProject = SessionProjectName.displayName(for: cwd)
             }
-            guard window.contains(record.timestamp) else { continue }
             if let contextModel = record.contextModel {
                 currentModel = contextModel
             }
-            guard let usage = record.lastTokenUsage else { continue }
+            guard window.contains(record.timestamp) else { return }
+            guard let usage = record.lastTokenUsage else { return }
             let model = record.model ?? currentModel
             let totals = ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
-            let day = Self.dayString(record.timestamp)
+            let day = stream.utcDay(for: record.timestamp)
             byModel[model, default: .zero] = byModel[model, default: .zero] + totals
             byProject[currentProject, default: .zero] = byProject[currentProject, default: .zero] + totals
             byDay[day, default: .zero] = byDay[day, default: .zero] + totals
             byDayModel[day, default: [:]][model, default: .zero] = byDayModel[day, default: [:]][model, default: .zero] + totals
             if PricingTable.price(for: model) == nil { unknown.insert(model) }
         }
+        record(result: result, diagnostics: &diagnostics)
     }
 
-    private func recordRead(
-        of file: URL,
-        fallbackBytes: @autoclosure () -> Int,
+    private func record(
+        result: UsageCostLogStreamResult,
         diagnostics: inout UsageCostScanDiagnostics)
     {
-        let bytes = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? fallbackBytes()
-        diagnostics.bytesRead += bytes
-        diagnostics.maxBufferedBytes = max(diagnostics.maxBufferedBytes, bytes)
+        diagnostics.bytesRead += result.bytesRead
+        diagnostics.candidateLines += result.candidateLines
+        diagnostics.decodedLines += result.decodedLines
+        diagnostics.malformedCandidateLines += result.malformedCandidateLines
+        diagnostics.oversizedLines += result.oversizedLines
+        diagnostics.maxBufferedBytes = max(diagnostics.maxBufferedBytes, result.maxBufferedBytes)
     }
 
     private func jsonlFiles(window: DateInterval) -> [URL] {
@@ -239,10 +247,6 @@ public struct UsageCostScanner: Sendable {
         return RunwayDates.parse(String(name[match]) + "T00:00:00Z")
     }
 
-    private static func dayString(_ date: Date) -> String {
-        ApiEquivalentSummary.apiDay(date)
-    }
-
     private static func estimatedCost(byModel: [String: ApiEquivalentTotals]) -> Decimal {
         byModel.reduce(Decimal(0)) { result, item in
             result + (PricingTable.cost(model: item.key, totals: item.value) ?? PricingTable.equivalentCost(totals: item.value))
@@ -260,42 +264,6 @@ extension ApiEquivalentTotals {
             outputTokens: usage.outputTokens,
             turns: turns,
             threads: threads)
-    }
-}
-
-struct JSONLineRecord {
-    var timestamp: Date
-    var model: String?
-    var contextModel: String?
-    var sessionCWD: String?
-    var lastTokenUsage: TokenUsage?
-
-    static func parse(_ line: String) throws -> JSONLineRecord {
-        let data = Data(line.utf8)
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        let timestampText = object["timestamp"] as? String ?? ""
-        let timestamp = RunwayDates.parse(timestampText) ?? .distantPast
-        let payload = object["payload"] as? [String: Any]
-        let turnContext = object["turn_context"] as? [String: Any]
-        let contextModel = object["type"] as? String == "turn_context" ? payload?["model"] as? String : nil
-        let model = turnContext?["model"] as? String ?? payload?["model"] as? String
-        let sessionCWD = payload?["cwd"] as? String
-        return JSONLineRecord(
-            timestamp: timestamp,
-            model: model,
-            contextModel: contextModel,
-            sessionCWD: sessionCWD,
-            lastTokenUsage: tokenUsage(from: payload))
-    }
-
-    private static func tokenUsage(from payload: [String: Any]?) -> TokenUsage? {
-        guard let info = payload?["info"] as? [String: Any],
-              let usage = info["last_token_usage"] as? [String: Any]
-        else { return nil }
-        let input = usage["input_tokens"] as? Int ?? 0
-        let cached = usage["cached_input_tokens"] as? Int ?? 0
-        let output = (usage["output_tokens"] as? Int ?? 0) + (usage["reasoning_output_tokens"] as? Int ?? 0)
-        return TokenUsage(inputTokens: input, cachedInputTokens: cached, outputTokens: output)
     }
 }
 

@@ -92,7 +92,7 @@ struct CostScannerTests {
 
         #expect(report.summary.totals.turns == 2)
         #expect(report.diagnostics.bytesRead == firstContents.utf8.count + secondContents.utf8.count)
-        #expect(report.diagnostics.candidateLines == 4)
+        #expect(report.diagnostics.candidateLines == 3)
         #expect(report.diagnostics.decodedLines == 3)
         #expect(report.diagnostics.maxBufferedBytes == max(firstContents.utf8.count, secondContents.utf8.count))
         #expect(report.diagnostics.candidateFiles == 2)
@@ -169,6 +169,161 @@ struct CostScannerTests {
                 end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
 
         #expect(summary.projectRows.map(\.name) == ["codex-runway"])
+    }
+
+    @Test("turn context model before selected window applies to in-window tokens")
+    func modelContextCanPrecedeWindow() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try """
+        {"timestamp":"2026-06-28T23:59:00Z","type":"turn_context","payload":{"model":"gpt-5.5"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0}}}}
+        """.write(to: sessionDir.appending(path: "rollout-model-before-window.jsonl"), atomically: true, encoding: .utf8)
+
+        let summary = try UsageCostScanner(codexHome: root.url).scanAPIEquivalent(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(summary.modelRows.map(\.name) == ["gpt-5.5"])
+        #expect(summary.warnings.isEmpty)
+    }
+
+    @Test("streams CRLF records across chunk boundaries and includes the final unterminated record")
+    func streamsChunkBoundariesAndFinalRecord() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let padding = String(repeating: "x", count: 262_100)
+        let irrelevant = "{\"timestamp\":\"2026-06-29T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"message\",\"content\":\"\(padding)\"}}"
+        let token = "{\"timestamp\":\"2026-06-29T00:01:00.123Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":20,\"output_tokens\":5,\"reasoning_output_tokens\":2}}},\"turn_context\":{\"model\":\"gpt-5.5\"}}"
+        let contents = irrelevant + "\r\n" + token
+        try Data(contents.utf8).write(to: sessionDir.appending(path: "rollout-boundary.jsonl"))
+
+        let report = try UsageCostScanner(codexHome: root.url).scanAPIEquivalentReport(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(report.summary.totals.uncachedInputTokens == 80)
+        #expect(report.summary.totals.cachedInputTokens == 20)
+        #expect(report.summary.totals.outputTokens == 7)
+        #expect(report.summary.totals.turns == 1)
+        #expect(report.diagnostics.bytesRead == contents.utf8.count)
+    }
+
+    @Test("rejects malformed candidates and recovers after oversized lines with an explicit warning")
+    func reportsOversizedLinesAndRecovers() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let oversized = "{\"token_count\":\"" + String(repeating: "x", count: 8 * 1_024 * 1_024) + "\"}"
+        let malformed = "{\"type\":\"token_count\""
+        let token = "{\"timestamp\":\"2026-06-29T00:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":0,\"output_tokens\":5,\"reasoning_output_tokens\":0}}},\"turn_context\":{\"model\":\"gpt-5.5\"}}"
+        let contents = oversized + "\n" + malformed + "\n" + token + "\n"
+        try Data(contents.utf8).write(to: sessionDir.appending(path: "rollout-oversized.jsonl"))
+
+        let report = try UsageCostScanner(codexHome: root.url).scanAPIEquivalentReport(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(report.summary.totals.turns == 1)
+        #expect(report.diagnostics.oversizedLines == 1)
+        #expect(report.diagnostics.malformedCandidateLines == 1)
+        #expect(report.diagnostics.maxBufferedBytes <= 8 * 1_024 * 1_024)
+        #expect(report.summary.warnings.contains("oversized-jsonl-lines:1"))
+    }
+
+    @Test("stream checkpoints only LF-complete records and can reread a final partial record")
+    func streamCheckpointDefersFinalRecord() throws {
+        let root = try TemporaryDirectory()
+        let file = root.url.appending(path: "rollout-partial.jsonl")
+        let context = "{\"timestamp\":\"2026-06-29T00:00:00Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n"
+        let token = "{\"timestamp\":\"2026-06-29T00:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":0,\"output_tokens\":5,\"reasoning_output_tokens\":0}}}}"
+        try Data((context + token).utf8).write(to: file)
+        let checkpoint = UInt64(context.utf8.count)
+        let stream = UsageCostLogStream(chunkSize: 17)
+        var firstPass: [UsageCostParsedLine] = []
+
+        let partial = try stream.read(file: file, fromOffset: checkpoint) { firstPass.append($0) }
+
+        #expect(firstPass.count == 1)
+        #expect(firstPass.first?.byteOffset == checkpoint)
+        #expect(firstPass.first?.isLFComplete == false)
+        #expect(partial.lastCompleteOffset == checkpoint)
+        #expect(partial.trailingLineStartOffset == checkpoint)
+
+        let writer = try FileHandle(forWritingTo: file)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data("\n".utf8))
+        try writer.close()
+        var secondPass: [UsageCostParsedLine] = []
+        let completed = try stream.read(file: file, fromOffset: checkpoint) { secondPass.append($0) }
+
+        #expect(secondPass.count == 1)
+        #expect(secondPass.first?.byteOffset == checkpoint)
+        #expect(secondPass.first?.isLFComplete == true)
+        #expect(completed.lastCompleteOffset == completed.snapshotSize)
+        #expect(completed.trailingLineStartOffset == nil)
+    }
+
+    @Test("stream reads only the file size captured when it opens")
+    func streamUsesOpeningSnapshot() throws {
+        let root = try TemporaryDirectory()
+        let file = root.url.appending(path: "rollout-growing.jsonl")
+        let initial = "{\"timestamp\":\"2026-06-29T00:00:00Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n"
+        let appended = "{\"timestamp\":\"2026-06-29T00:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":0,\"output_tokens\":5,\"reasoning_output_tokens\":0}}}}\n"
+        try Data(initial.utf8).write(to: file)
+        let stream = UsageCostLogStream(chunkSize: 19)
+        var firstPassCount = 0
+
+        let first = try stream.read(file: file) { _ in
+            firstPassCount += 1
+            let writer = try FileHandle(forWritingTo: file)
+            try writer.seekToEnd()
+            try writer.write(contentsOf: Data(appended.utf8))
+            try writer.close()
+        }
+
+        #expect(firstPassCount == 1)
+        #expect(first.snapshotSize == UInt64(initial.utf8.count))
+        #expect(first.bytesRead == initial.utf8.count)
+        var suffixCount = 0
+        let suffix = try stream.read(file: file, fromOffset: first.lastCompleteOffset) { _ in
+            suffixCount += 1
+        }
+        #expect(suffixCount == 1)
+        #expect(suffix.bytesRead == appended.utf8.count)
+    }
+
+    @Test("scanner propagates task cancellation between file chunks")
+    func scannerPropagatesCancellation() async throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try """
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}},"turn_context":{"model":"gpt-5.5"}}
+        """.write(to: sessionDir.appending(path: "rollout-cancel.jsonl"), atomically: true, encoding: .utf8)
+        let scanner = UsageCostScanner(codexHome: root.url)
+        let window = DateInterval(
+            start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+            end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!)
+
+        let didCancel = await Task { () -> Bool in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                _ = try scanner.scanAPIEquivalent(window: window)
+                return false
+            } catch is CancellationError {
+                return true
+            } catch {
+                return false
+            }
+        }.value
+
+        #expect(didCancel)
     }
 
     @Test("turn context cwd groups API equivalent projects")
