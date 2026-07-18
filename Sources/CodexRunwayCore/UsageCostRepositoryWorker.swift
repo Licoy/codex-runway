@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor UsageCostRepositoryWorker {
-    static let currentParserVersion = 1
+    static let currentParserVersion = 2
 
     private let codexHome: URL
     private let databaseURL: URL
@@ -74,7 +74,7 @@ actor UsageCostRepositoryWorker {
             try Task.checkCancellation()
             let events = try opened.store.events(in: query.window)
             try Task.checkCancellation()
-            result[query.id] = UsageCostSummaryBuilder.make(
+            result[query.id] = try UsageCostSummaryBuilder.make(
                 events: events,
                 window: query.window,
                 calculatedAt: calculatedAt,

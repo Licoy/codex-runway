@@ -402,6 +402,28 @@ struct CostScannerTests {
         #expect(session.estimatedUSD ?? 0 > 0)
     }
 
+    @Test("session activity reports invalid token usage instead of dropping it")
+    func sessionActivityRejectsInvalidTokenUsage() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(
+            path: "sessions/2026/06/29",
+            directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let sessionID = "deadbeef-dead-4eef-8ead-deadbeefdead"
+        let contents = """
+        {"timestamp":"2026-06-29T00:00:00Z","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/tmp/project"}}
+        {"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":\(Int.max),"reasoning_output_tokens":1}}}}
+        """
+        try contents.write(
+            to: sessionDir.appending(path: "rollout-\(sessionID).jsonl"),
+            atomically: true,
+            encoding: .utf8)
+
+        #expect(throws: UsageCostArithmeticError.self) {
+            _ = try SessionActivityScanner(codexHome: root.url).scan(limit: 1)
+        }
+    }
+
     @Test("session activity scanner uses index titles but sorts by file activity")
     func sessionActivityUsesIndexTitlesButSortsByFileActivity() throws {
         let root = try TemporaryDirectory()
@@ -590,6 +612,40 @@ struct CostScannerTests {
         #expect(summary.totals.totalTokens == 3_300_000)
         #expect(summary.totals.turns == 26)
         #expect(summary.estimatedUSD ?? 0 > 0)
+    }
+
+    @Test("online analytics rejects invalid and non-finite numeric values")
+    func analyticsRejectsInvalidNumericValues() throws {
+        let window = DateInterval(
+            start: ISO8601DateFormatter().date(from: "2026-06-24T00:00:00Z")!,
+            end: ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!)
+        let invalidPayloads = [
+            #"{"data":[{"date":"2026-06-29","totals":{"turns":1.5}}]}"#,
+            #"{"data":[{"date":"2026-06-29","totals":{"credits":"nan"}}]}"#,
+            #"{"data":[{"date":"2026-06-29","models":[{"model":"gpt-5.5","turns":"invalid"}]}]}"#,
+        ]
+        for payload in invalidPayloads {
+            do {
+                _ = try ApiEquivalentSummary.decodeAnalytics(
+                    from: Data(payload.utf8),
+                    window: window)
+                Issue.record("Expected invalid analytics number to fail")
+            } catch {
+                // Expected.
+            }
+        }
+
+        let overflowingCredits = """
+        {"data":[
+          {"date":"2026-06-28","totals":{"credits":1.7976931348623157e308}},
+          {"date":"2026-06-29","totals":{"credits":1.7976931348623157e308}}
+        ]}
+        """
+        #expect(throws: UsageCostArithmeticError.self) {
+            _ = try ApiEquivalentSummary.decodeAnalytics(
+                from: Data(overflowingCredits.utf8),
+                window: window)
+        }
     }
 
     @Test("online analytics with only total tokens is tokens only")

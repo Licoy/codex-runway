@@ -117,16 +117,16 @@ public struct SessionActivityScanner: Sendable {
         let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
         var state = SessionParseState(title: providedTitle.flatMap(cleanSessionTitle), updatedAt: providedUpdatedAt)
         for line in try probeLines(file, size: size) {
-            applySessionLine(line, to: &state, includesLastUsage: false)
+            try applySessionLine(line, to: &state, includesLastUsage: false)
         }
         if state.byModel.isEmpty, size <= Self.smallFullScanBytes {
             state.byModel = [:]
             for line in try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map(String.init) {
-                applySessionLine(line, to: &state, includesLastUsage: true)
+                try applySessionLine(line, to: &state, includesLastUsage: true)
             }
         }
         guard let id = state.id, let updatedAt = state.updatedAt else { return nil }
-        let totals = state.byModel.values.reduce(.zero, +)
+        let totals = try ApiEquivalentTotals.sum(state.byModel.values)
         return SessionActivityItem(
             id: id,
             title: state.title ?? "Untitled",
@@ -160,7 +160,11 @@ public struct SessionActivityScanner: Sendable {
         String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
     }
 
-    private func applySessionLine(_ line: String, to state: inout SessionParseState, includesLastUsage: Bool) {
+    private func applySessionLine(
+        _ line: String,
+        to state: inout SessionParseState,
+        includesLastUsage: Bool
+    ) throws {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
         let payload = object["payload"] as? [String: Any]
         if let stamp = object["timestamp"] as? String, let date = RunwayDates.parse(stamp) {
@@ -179,10 +183,14 @@ public struct SessionActivityScanner: Sendable {
         }
         let turnContext = object["turn_context"] as? [String: Any]
         let model = turnContext?["model"] as? String ?? payload?["model"] as? String ?? state.currentModel
-        if let usage = tokenUsage(from: payload, key: "total_token_usage") {
-            state.byModel[model] = ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
-        } else if includesLastUsage, let usage = tokenUsage(from: payload, key: "last_token_usage") {
-            state.byModel[model, default: .zero] = state.byModel[model, default: .zero] + ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
+        if let usage = try tokenUsage(from: payload, key: "total_token_usage") {
+            state.byModel[model] = try ApiEquivalentTotals(validating: usage, turns: 1, threads: 0)
+        } else if includesLastUsage,
+                  let usage = try tokenUsage(from: payload, key: "last_token_usage")
+        {
+            let totals = try ApiEquivalentTotals(validating: usage, turns: 1, threads: 0)
+            state.byModel[model, default: .zero] = try state.byModel[model, default: .zero]
+                .adding(totals)
         }
     }
 
@@ -252,14 +260,27 @@ private func sessionID(from file: URL) -> String? {
     return id.isEmpty ? nil : id
 }
 
-private func tokenUsage(from payload: [String: Any]?, key: String) -> TokenUsage? {
+private func tokenUsage(from payload: [String: Any]?, key: String) throws -> TokenUsage? {
     guard let info = payload?["info"] as? [String: Any],
           let usage = info[key] as? [String: Any]
     else { return nil }
-    let input = usage["input_tokens"] as? Int ?? 0
-    let cached = usage["cached_input_tokens"] as? Int ?? 0
-    let output = (usage["output_tokens"] as? Int ?? 0) + (usage["reasoning_output_tokens"] as? Int ?? 0)
-    return TokenUsage(inputTokens: input, cachedInputTokens: cached, outputTokens: output)
+    let input = try tokenInteger(usage, key: "input_tokens")
+    let cached = try tokenInteger(usage, key: "cached_input_tokens")
+    let output = try tokenInteger(usage, key: "output_tokens")
+    let reasoning = try tokenInteger(usage, key: "reasoning_output_tokens")
+    guard input >= 0, cached >= 0, output >= 0, reasoning >= 0, cached <= input else {
+        throw UsageCostArithmeticError.invalidValue(field: "session token usage")
+    }
+    let combinedOutput = try checkedAdd(output, reasoning, field: "session output tokens")
+    return TokenUsage(inputTokens: input, cachedInputTokens: cached, outputTokens: combinedOutput)
+}
+
+private func tokenInteger(_ usage: [String: Any], key: String) throws -> Int {
+    guard let raw = usage[key] else { return 0 }
+    guard let value = raw as? Int else {
+        throw UsageCostArithmeticError.invalidValue(field: "session token usage")
+    }
+    return value
 }
 
 private func dayFromPath(_ file: URL) -> Date? {

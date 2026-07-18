@@ -93,6 +93,55 @@ struct UsageCostRepositoryCorruptionTests {
         let afterTimestamp = await repository.diagnosticsSnapshot()
         #expect(rebuiltTimestamp[request.id]?.totals.turns == 1)
         #expect(afterTimestamp.databaseRebuilds == final.databaseRebuilds + 1)
+
+        do {
+            let external = try SQLiteDatabase(url: fixture.databaseURL)
+            try external.execute(
+                "UPDATE usage_events SET timestamp = 1e999",
+                operation: "test non-finite timestamp corruption")
+        }
+        let rebuiltInfiniteTimestamp = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let afterInfiniteTimestamp = await repository.diagnosticsSnapshot()
+        #expect(rebuiltInfiniteTimestamp[request.id]?.totals.turns == 1)
+        #expect(afterInfiniteTimestamp.databaseRebuilds == afterTimestamp.databaseRebuilds + 1)
+    }
+
+    @Test("invalid source anomaly counts and fingerprints rebuild the index")
+    func invalidSourceMetadataIsRebuilt() async throws {
+        let fixture = try RepositoryFixture()
+        try fixture.write(
+            tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 100) + "\n",
+            basename: "rollout-source-corrupt.jsonl")
+        let repository = fixture.repository()
+        let request = fullWindowQuery()
+        _ = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let before = await repository.diagnosticsSnapshot()
+
+        do {
+            let external = try SQLiteDatabase(url: fixture.databaseURL)
+            try external.execute(
+                "UPDATE source_files SET malformed_lines = 9223372036854775807",
+                operation: "test source anomaly corruption")
+        }
+        let rebuiltCounts = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let afterCounts = await repository.diagnosticsSnapshot()
+        #expect(rebuiltCounts[request.id]?.totals.turns == 1)
+        #expect(afterCounts.databaseRebuilds == before.databaseRebuilds + 1)
+
+        do {
+            let external = try SQLiteDatabase(url: fixture.databaseURL)
+            try external.execute(
+                "UPDATE source_files SET full_hash = NULL",
+                operation: "test source fingerprint corruption")
+        }
+        let rebuiltFingerprint = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let afterFingerprint = await repository.diagnosticsSnapshot()
+        #expect(rebuiltFingerprint[request.id]?.totals.turns == 1)
+        #expect(afterFingerprint.databaseRebuilds == afterCounts.databaseRebuilds + 1)
     }
 
     @Test("ordinary SQLite query errors propagate without deleting the index")

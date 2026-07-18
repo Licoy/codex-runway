@@ -30,7 +30,7 @@ struct UsageCostIndexedSource: Sendable, Equatable {
     var parserVersion: Int
     var malformedLines: Int
     var oversizedLines: Int
-    var fullHash: Data?
+    var contentFingerprint: Data?
 }
 
 struct UsageCostIndexedEvent: Sendable, Equatable {
@@ -204,8 +204,8 @@ extension SQLiteStatement {
         try bind(Int64(source.parserVersion), at: 17)
         try bind(Int64(source.malformedLines), at: 18)
         try bind(Int64(source.oversizedLines), at: 19)
-        if let fullHash = source.fullHash {
-            try bind(fullHash, at: 20)
+        if let contentFingerprint = source.contentFingerprint {
+            try bind(contentFingerprint, at: 20)
         } else {
             try bindNull(at: 20)
         }

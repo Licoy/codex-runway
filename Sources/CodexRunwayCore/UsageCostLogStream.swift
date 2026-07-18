@@ -34,12 +34,14 @@ struct UsageCostLogStreamResult: Equatable, Sendable {
     var maxBufferedBytes: Int
     var lastCompleteOffset: UInt64
     var trailingLineStartOffset: UInt64?
-    var fullHash: Data?
+    var contentFingerprint: Data
 }
 
 struct UsageCostLogStream {
     static let chunkSize = 256 * 1_024
     static let maximumLineBytes = 8 * 1_024 * 1_024
+    private static let fingerprintSeed = Data(SHA256.hash(
+        data: Data("usage-cost-content-fingerprint-v2".utf8)))
 
     private let reader: UsageCostLogReader
     private let parser = UsageCostLogParser()
@@ -54,16 +56,25 @@ struct UsageCostLogStream {
     func read(
         file: URL,
         fromOffset: UInt64 = 0,
+        initialFingerprint: Data? = nil,
         expectedSource: UsageCostSourceFile? = nil,
+        requireStableSnapshot: Bool = false,
         onRecord: (UsageCostParsedLine) throws -> Void) throws -> UsageCostLogStreamResult
     {
         var decodedLines = 0
         var malformedLines = 0
         var incompleteMalformedLines = 0
+        var contentFingerprint = initialFingerprint ?? Self.fingerprintSeed
         let result = try reader.read(
             file: file,
             fromOffset: fromOffset,
-            expectedSource: expectedSource) { line in
+            expectedSource: expectedSource,
+            requireStableSnapshot: requireStableSnapshot) { line in
+            if line.isLFComplete {
+                contentFingerprint = Self.extendFingerprint(
+                    contentFingerprint,
+                    with: line.data)
+            }
             let record: UsageCostLogRecord
             do {
                 record = try autoreleasepool { try parser.parse(line.data) }
@@ -95,9 +106,15 @@ struct UsageCostLogStream {
             maxBufferedBytes: result.maxBufferedBytes,
             lastCompleteOffset: result.lastCompleteOffset,
             trailingLineStartOffset: result.trailingLineStartOffset,
-            fullHash: result.fullHash)
+            contentFingerprint: contentFingerprint)
     }
 
+    private static func extendFingerprint(_ fingerprint: Data, with line: Data) -> Data {
+        var hasher = SHA256()
+        hasher.update(data: fingerprint)
+        hasher.update(data: line)
+        return Data(hasher.finalize())
+    }
 }
 
 private struct UsageCostCandidateLine {
@@ -120,14 +137,14 @@ private struct UsageCostLogReadResult {
     var maxBufferedBytes = 0
     var lastCompleteOffset: UInt64
     var trailingLineStartOffset: UInt64?
-    var fullHash: Data?
 }
 
-private enum UsageCostLogReaderError: Error {
+enum UsageCostLogReaderError: Error {
     case offsetBeyondSnapshot(offset: UInt64, snapshotSize: UInt64)
     case unexpectedEndOfFile(expected: UInt64, actual: UInt64)
     case invalidSourceFile
     case sourceIdentityChanged
+    case sourceMetadataChanged
     case fileStatus(code: Int32)
 }
 
@@ -139,6 +156,7 @@ private struct UsageCostLogReader {
         file: URL,
         fromOffset: UInt64,
         expectedSource: UsageCostSourceFile?,
+        requireStableSnapshot: Bool,
         onCandidate: (UsageCostCandidateLine) throws -> Void) throws -> UsageCostLogReadResult
     {
         let handle = try FileHandle(forReadingFrom: file)
@@ -151,10 +169,10 @@ private struct UsageCostLogReader {
             throw UsageCostLogReaderError.invalidSourceFile
         }
         if let expectedSource {
-            guard Int64(metadata.st_dev) == expectedSource.device,
-                  Int64(bitPattern: UInt64(metadata.st_ino)) == expectedSource.inode,
-                  try nanoseconds(metadata.st_birthtimespec) == expectedSource.birthNanoseconds
-            else { throw UsageCostLogReaderError.sourceIdentityChanged }
+            try validate(
+                metadata,
+                matches: expectedSource,
+                requireStableSnapshot: requireStableSnapshot)
         }
         let snapshotSize = UInt64(metadata.st_size)
         guard fromOffset <= snapshotSize else {
@@ -170,7 +188,6 @@ private struct UsageCostLogReader {
         var position = fromOffset
         var bytesRead = 0
         var maxBufferedBytes = 0
-        var fullHasher = fromOffset == 0 ? SHA256() : nil
         while position < snapshotSize {
             try Task.checkCancellation()
             let remaining = snapshotSize - position
@@ -182,7 +199,6 @@ private struct UsageCostLogReader {
                         expected: snapshotSize,
                         actual: position)
                 }
-                fullHasher?.update(data: chunk)
                 maxBufferedBytes = max(maxBufferedBytes, chunk.count)
                 try accumulator.consume(chunk: chunk, at: position, onCandidate: onCandidate)
                 maxBufferedBytes = max(maxBufferedBytes, accumulator.maxBufferedBytes)
@@ -192,6 +208,9 @@ private struct UsageCostLogReader {
             bytesRead += consumed
         }
         try accumulator.finish(onCandidate: onCandidate)
+        if requireStableSnapshot {
+            try validateStableSnapshot(handle: handle, initial: metadata)
+        }
         maxBufferedBytes = max(maxBufferedBytes, accumulator.maxBufferedBytes)
         return UsageCostLogReadResult(
             snapshotSize: snapshotSize,
@@ -208,8 +227,45 @@ private struct UsageCostLogReader {
             lastCompleteOffset: accumulator.lastCompleteOffset,
             trailingLineStartOffset: accumulator.lastCompleteOffset < snapshotSize
                 ? accumulator.lastCompleteOffset
-                : nil,
-            fullHash: fullHasher.map { Data($0.finalize()) })
+                : nil)
+    }
+
+    private func validate(
+        _ metadata: stat,
+        matches expected: UsageCostSourceFile,
+        requireStableSnapshot: Bool
+    ) throws {
+        guard Int64(metadata.st_dev) == expected.device,
+              Int64(bitPattern: UInt64(metadata.st_ino)) == expected.inode,
+              try nanoseconds(metadata.st_birthtimespec) == expected.birthNanoseconds
+        else { throw UsageCostLogReaderError.sourceIdentityChanged }
+        guard requireStableSnapshot else { return }
+        let modification = try nanoseconds(metadata.st_mtimespec)
+        let statusChange = try nanoseconds(metadata.st_ctimespec)
+        guard UInt64(metadata.st_size) == expected.size,
+              modification == expected.modificationNanoseconds,
+              statusChange == expected.statusChangeNanoseconds
+        else { throw UsageCostLogReaderError.sourceMetadataChanged }
+    }
+
+    private func validateStableSnapshot(handle: FileHandle, initial: stat) throws {
+        var final = stat()
+        guard Darwin.fstat(handle.fileDescriptor, &final) == 0 else {
+            throw UsageCostLogReaderError.fileStatus(code: errno)
+        }
+        let finalBirth = try nanoseconds(final.st_birthtimespec)
+        let initialBirth = try nanoseconds(initial.st_birthtimespec)
+        let finalModification = try nanoseconds(final.st_mtimespec)
+        let initialModification = try nanoseconds(initial.st_mtimespec)
+        let finalStatusChange = try nanoseconds(final.st_ctimespec)
+        let initialStatusChange = try nanoseconds(initial.st_ctimespec)
+        guard final.st_size == initial.st_size,
+              final.st_dev == initial.st_dev,
+              final.st_ino == initial.st_ino,
+              finalBirth == initialBirth,
+              finalModification == initialModification,
+              finalStatusChange == initialStatusChange
+        else { throw UsageCostLogReaderError.sourceMetadataChanged }
     }
 }
 

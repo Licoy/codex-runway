@@ -16,7 +16,15 @@ func decodeUsageCostSource(
           UInt64(firstLength) <= size,
           UInt64(checkpointLength) <= completeOffset
     else { throw UsageCostIndexStoreError.corruptRow(field: "source checkpoint") }
-    let fullHash = try optionalHash(row, column: 20, field: "full hash")
+    let contentFingerprint = try requiredHash(
+        row,
+        column: 20,
+        field: "content fingerprint")
+    let malformedLines = try nonnegativeInt(row, column: 18, field: "malformed lines")
+    let oversizedLines = try nonnegativeInt(row, column: 19, field: "oversized lines")
+    guard UInt64(malformedLines) <= completeOffset,
+          UInt64(oversizedLines) <= completeOffset
+    else { throw UsageCostIndexStoreError.corruptRow(field: "source anomaly counts") }
     let source = UsageCostIndexedSource(
         id: sourceID,
         basename: try requiredString(row, column: 1, field: "source basename"),
@@ -33,9 +41,9 @@ func decodeUsageCostSource(
         firstHash: firstHash, firstHashLength: firstLength,
         checkpointHash: checkpointHash, checkpointHashLength: checkpointLength,
         parserVersion: try nonnegativeInt(row, column: 17, field: "source parser version"),
-        malformedLines: try nonnegativeInt(row, column: 18, field: "malformed lines"),
-        oversizedLines: try nonnegativeInt(row, column: 19, field: "oversized lines"),
-        fullHash: fullHash)
+        malformedLines: malformedLines,
+        oversizedLines: oversizedLines,
+        contentFingerprint: contentFingerprint)
     guard UsageCostSourceRoot(rawValue: source.root) != nil else {
         throw UsageCostIndexStoreError.corruptRow(field: "source root")
     }
@@ -107,15 +115,6 @@ private func requiredHash(
         throw UsageCostIndexStoreError.corruptRow(field: field)
     }
     return value
-}
-
-private func optionalHash(
-    _ row: SQLiteStatement,
-    column: Int32,
-    field: String
-) throws -> Data? {
-    if row.columnType(column) == SQLITE_NULL { return nil }
-    return try requiredHash(row, column: column, field: field)
 }
 
 func requiredInt64(

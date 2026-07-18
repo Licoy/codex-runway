@@ -25,11 +25,11 @@ struct UsageCostIndexRefresher {
         var provisionalAnomalies = UsageCostScanAnomalies.zero
         for item in selection.sources.sorted(by: { $0.file.basename < $1.file.basename }) {
             try Task.checkCancellation()
-            provisionalAnomalies += try update(
+            provisionalAnomalies = try provisionalAnomalies.adding(update(
                 item,
                 existing: indexedByName[item.file.basename],
                 indexer: indexer,
-                diagnostics: &diagnostics)
+                diagnostics: &diagnostics))
         }
         if selection.hashCacheChanged {
             try store.replaceSourceHashCache(with: selection.hashCacheRows)
@@ -59,7 +59,12 @@ struct UsageCostIndexRefresher {
                 let cached = cachedByIdentity[UsageCostSourceIdentity(file: file)]
                     .flatMap { $0.matches(file) ? $0 : nil }
                 if let cached { retainedHashes[cached.identity] = cached }
-                selected.append(SelectedSource(file: file, fullHash: cached?.digest))
+                selected.append(SelectedSource(
+                    file: file,
+                    byteHash: cached?.digest,
+                    indexedByteHash: cachedByteHash(
+                        for: indexedByName[basename],
+                        in: cachedByIdentity)))
                 continue
             }
             var hashes: [(file: UsageCostSourceFile, digest: Data)] = []
@@ -85,7 +90,12 @@ struct UsageCostIndexRefresher {
             let preferred = preferredCandidate(
                 hashes.map(\.file),
                 indexed: indexedByName[basename]) ?? hashes[0].0
-            selected.append(SelectedSource(file: preferred, fullHash: hashes[0].digest))
+            selected.append(SelectedSource(
+                file: preferred,
+                byteHash: hashes[0].digest,
+                indexedByteHash: cachedByteHash(
+                    for: indexedByName[basename],
+                    in: cachedByIdentity)))
         }
         return SourceSelection(
             sources: selected,
@@ -101,6 +111,23 @@ struct UsageCostIndexRefresher {
         return candidates.first { sameIdentity($0, indexed) }
     }
 
+    private func cachedByteHash(
+        for indexed: UsageCostIndexedSource?,
+        in cache: [UsageCostSourceIdentity: UsageCostCachedFullHash]
+    ) -> Data? {
+        guard let indexed else { return nil }
+        let identity = UsageCostSourceIdentity(
+            device: indexed.device,
+            inode: indexed.inode,
+            birthTimeNanoseconds: indexed.birthTimeNanoseconds)
+        guard let cached = cache[identity],
+              cached.size == indexed.size,
+              cached.modificationTimeNanoseconds == indexed.modificationTimeNanoseconds,
+              cached.statusChangeTimeNanoseconds == indexed.statusChangeTimeNanoseconds
+        else { return nil }
+        return cached.digest
+    }
+
     private func update(
         _ selected: SelectedSource,
         existing: UsageCostIndexedSource?,
@@ -111,7 +138,6 @@ struct UsageCostIndexRefresher {
             return try indexer.rebuild(
                 file: selected.file,
                 existing: nil,
-                knownFullHash: selected.fullHash,
                 diagnostics: &diagnostics)
         }
         if sameIdentity(selected.file, existing) {
@@ -121,15 +147,14 @@ struct UsageCostIndexRefresher {
                 indexer: indexer,
                 diagnostics: &diagnostics)
         }
-        if try canAdoptCopy(selected, existing: existing, diagnostics: &diagnostics) {
-            try indexer.adopt(file: selected.file, existing: existing, fullHash: selected.fullHash)
+        if canAdoptExactCopy(selected, existing: existing) {
+            try indexer.adopt(file: selected.file, existing: existing)
             diagnostics.adoptedFiles += 1
             return .zero
         }
         return try indexer.rebuild(
             file: selected.file,
             existing: existing,
-            knownFullHash: selected.fullHash,
             diagnostics: &diagnostics)
     }
 
@@ -144,23 +169,24 @@ struct UsageCostIndexRefresher {
         let pathChanged = file.url.path != existing.path || file.root.rawValue != existing.root
         let sameModificationTime = file.modificationNanoseconds == existing.modificationTimeNanoseconds
         if pathChanged, sameSize, sameModificationTime, existing.completeOffset == existing.size {
-            if try canAdoptCopy(selected, existing: existing, diagnostics: &diagnostics) {
-                try indexer.adopt(file: file, existing: existing, fullHash: selected.fullHash)
+            if try canAdoptMove(
+                selected,
+                existing: existing,
+                indexer: indexer,
+                diagnostics: &diagnostics)
+            {
+                try indexer.adopt(file: file, existing: existing)
                 diagnostics.adoptedFiles += 1
                 return .zero
             }
             return try indexer.rebuild(
                 file: file,
                 existing: existing,
-                knownFullHash: selected.fullHash,
                 diagnostics: &diagnostics)
         }
         let sameTimes = file.modificationNanoseconds == existing.modificationTimeNanoseconds
             && file.statusChangeNanoseconds == existing.statusChangeTimeNanoseconds
         if sameSize, sameTimes, existing.completeOffset == existing.size {
-            if let fullHash = selected.fullHash, fullHash != existing.fullHash {
-                try indexer.adopt(file: file, existing: existing, fullHash: fullHash)
-            }
             diagnostics.cacheHits += 1
             return .zero
         }
@@ -176,22 +202,41 @@ struct UsageCostIndexRefresher {
         return try indexer.rebuild(
             file: file,
             existing: existing,
-            knownFullHash: selected.fullHash,
             diagnostics: &diagnostics)
     }
 
-    private func canAdoptCopy(
+    private func canAdoptMove(
         _ selected: SelectedSource,
         existing: UsageCostIndexedSource,
+        indexer: UsageCostSourceIndexer,
         diagnostics: inout UsageCostRepositoryDiagnostics
     ) throws -> Bool {
-        guard selected.file.size == existing.size, let existingHash = existing.fullHash else {
+        guard selected.file.size == existing.size,
+              existing.completeOffset == existing.size
+        else {
             return false
         }
-        if let fullHash = selected.fullHash { return fullHash == existingHash }
-        let hash = try UsageCostFileHasher.fullSHA256(of: selected.file)
-        diagnostics.validationBytesRead += hash.bytesRead
-        return hash.digest == existingHash
+        if let selectedHash = selected.byteHash,
+           let indexedHash = selected.indexedByteHash
+        {
+            return selectedHash == indexedHash
+        }
+        return try indexer.canAdopt(
+            file: selected.file,
+            existing: existing,
+            diagnostics: &diagnostics)
+    }
+
+    private func canAdoptExactCopy(
+        _ selected: SelectedSource,
+        existing: UsageCostIndexedSource
+    ) -> Bool {
+        guard selected.file.size == existing.size,
+              existing.completeOffset == existing.size,
+              let selectedHash = selected.byteHash,
+              let indexedHash = selected.indexedByteHash
+        else { return false }
+        return selectedHash == indexedHash
     }
 
     private func sameIdentity(
@@ -205,8 +250,12 @@ struct UsageCostIndexRefresher {
 
     private func anomalyWarnings(provisional: UsageCostScanAnomalies) throws -> [String] {
         let rows = try store.sourceRows()
-        let malformed = rows.reduce(provisional.malformedLines) { $0 + $1.malformedLines }
-        let oversized = rows.reduce(provisional.oversizedLines) { $0 + $1.oversizedLines }
+        let malformed = try rows.reduce(provisional.malformedLines) {
+            try checkedAdd($0, $1.malformedLines, field: "malformed line count")
+        }
+        let oversized = try rows.reduce(provisional.oversizedLines) {
+            try checkedAdd($0, $1.oversizedLines, field: "oversized line count")
+        }
         var warnings: [String] = []
         if malformed > 0 { warnings.append("malformed-jsonl-lines:\(malformed)") }
         if oversized > 0 { warnings.append("oversized-jsonl-lines:\(oversized)") }
@@ -216,7 +265,8 @@ struct UsageCostIndexRefresher {
 
 private struct SelectedSource {
     var file: UsageCostSourceFile
-    var fullHash: Data?
+    var byteHash: Data?
+    var indexedByteHash: Data?
 }
 
 private struct SourceSelection {

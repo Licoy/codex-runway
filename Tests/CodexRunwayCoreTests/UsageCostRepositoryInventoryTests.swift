@@ -4,6 +4,108 @@ import Testing
 
 @Suite("Usage cost repository — source inventory")
 struct UsageCostRepositoryInventoryTests {
+    @Test("an appended source is adopted after an archive move")
+    func appendedSourceMoveIsAdopted() async throws {
+        let fixture = try RepositoryFixture()
+        let initial = tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 100) + "\n"
+        let original = try fixture.write(initial, basename: "rollout-appended-move.jsonl")
+        let identity = try fileIdentity(original)
+        let repository = fixture.repository()
+        let request = fullWindowQuery()
+        _ = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+
+        let suffix = tokenLine(timestamp: "2026-06-29T02:00:00Z", input: 200) + "\n"
+        try append(suffix, to: original)
+        let appended = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let beforeMove = await repository.diagnosticsSnapshot()
+        #expect(appended[request.id]?.totals.turns == 2)
+
+        let archived = try fixture.archivedURL(basename: original.lastPathComponent)
+        try FileManager.default.moveItem(at: original, to: archived)
+        #expect(try fileIdentity(archived) == identity)
+        let moved = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let afterMove = await repository.diagnosticsSnapshot()
+
+        #expect(moved[request.id]?.totals.turns == 2)
+        #expect(moved[request.id]?.totals.totalTokens == 310)
+        #expect(afterMove.adoptedFiles == beforeMove.adoptedFiles + 1)
+        #expect(afterMove.rebuiltFiles == beforeMove.rebuiltFiles)
+        #expect(afterMove.bytesRead == beforeMove.bytesRead)
+        #expect(afterMove.validationBytesRead - beforeMove.validationBytesRead
+            == initial.utf8.count + suffix.utf8.count)
+    }
+
+    @Test("an unterminated non-candidate tail prevents move adoption")
+    func unterminatedTailMoveRebuilds() async throws {
+        let fixture = try RepositoryFixture()
+        let originalText = "aaaa\n"
+        let changedText = "bbbbb"
+        #expect(originalText.utf8.count == changedText.utf8.count)
+        let original = try fixture.write(
+            originalText,
+            basename: "rollout-incomplete-move.jsonl")
+        let originalMTime = try #require(
+            original.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate)
+        let repository = fixture.repository()
+        let request = fullWindowQuery()
+        _ = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let before = await repository.diagnosticsSnapshot()
+
+        try replacePreservingIdentity(changedText, at: original)
+        try FileManager.default.setAttributes(
+            [.modificationDate: originalMTime],
+            ofItemAtPath: original.path)
+        let archived = try fixture.archivedURL(basename: original.lastPathComponent)
+        try FileManager.default.moveItem(at: original, to: archived)
+        _ = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let after = await repository.diagnosticsSnapshot()
+
+        #expect(after.rebuiltFiles == before.rebuiltFiles + 1)
+        #expect(after.adoptedFiles == before.adoptedFiles)
+    }
+
+    @Test("an oversized-line count change prevents move adoption")
+    func oversizedCountChangeMoveRebuilds() async throws {
+        let fixture = try RepositoryFixture()
+        let maximum = UsageCostLogStream.maximumLineBytes
+        let originalText = String(repeating: "x", count: maximum + 1) + "\n"
+        let changedText = String(repeating: "y", count: maximum / 2) + "\n"
+            + String(repeating: "z", count: maximum - maximum / 2) + "\n"
+        #expect(originalText.utf8.count == changedText.utf8.count)
+        let original = try fixture.write(
+            originalText,
+            basename: "rollout-oversized-move.jsonl")
+        let originalMTime = try #require(
+            original.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate)
+        let repository = fixture.repository()
+        let request = fullWindowQuery()
+        let initial = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let before = await repository.diagnosticsSnapshot()
+        #expect(initial[request.id]?.warnings.contains("oversized-jsonl-lines:1") == true)
+
+        try replacePreservingIdentity(changedText, at: original)
+        try FileManager.default.setAttributes(
+            [.modificationDate: originalMTime],
+            ofItemAtPath: original.path)
+        let archived = try fixture.archivedURL(basename: original.lastPathComponent)
+        try FileManager.default.moveItem(at: original, to: archived)
+        let refreshed = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let after = await repository.diagnosticsSnapshot()
+
+        #expect(refreshed[request.id]?.warnings.contains("oversized-jsonl-lines:1") == false)
+        #expect(after.rebuiltFiles == before.rebuiltFiles + 1)
+        #expect(after.adoptedFiles == before.adoptedFiles)
+    }
+
     @Test("archive move is adopted and an identical copy is counted once")
     func archiveMoveAndIdenticalCopyAreDeduplicated() async throws {
         let fixture = try RepositoryFixture()

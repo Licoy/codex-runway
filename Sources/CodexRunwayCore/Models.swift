@@ -273,13 +273,6 @@ public struct TokenUsage: Sendable, Equatable {
     public var outputTokens: Int
 
     public static let zero = TokenUsage(inputTokens: 0, cachedInputTokens: 0, outputTokens: 0)
-
-    public static func + (lhs: TokenUsage, rhs: TokenUsage) -> TokenUsage {
-        TokenUsage(
-            inputTokens: lhs.inputTokens + rhs.inputTokens,
-            cachedInputTokens: lhs.cachedInputTokens + rhs.cachedInputTokens,
-            outputTokens: lhs.outputTokens + rhs.outputTokens)
-    }
 }
 
 public struct ModelCostBreakdown: Sendable, Equatable {

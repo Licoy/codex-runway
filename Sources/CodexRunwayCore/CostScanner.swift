@@ -50,10 +50,11 @@ public struct UsageCostScanner: Sendable {
             if cost == nil { unknown.insert(model) }
             return ModelCostBreakdown(model: model, usage: usage, estimatedUSD: cost ?? 0)
         }
+        let totals = try TokenUsage.sum(byModel.values)
         return UsageCostScanReport(
             summary: UsageCostSummary(
                 window: window,
-                totals: byModel.values.reduce(.zero, +),
+                totals: totals,
                 modelBreakdown: breakdown,
                 estimatedUSD: breakdown.reduce(Decimal(0)) { $0 + $1.estimatedUSD },
                 pricingVersion: PricingTable.version,
@@ -114,7 +115,7 @@ public struct UsageCostScanner: Sendable {
                 estimatedUSD: Self.estimatedCost(byModel: byDayModel[day] ?? [:]),
                 rawCredits: 0)
         }
-        let totals = byDay.values.reduce(.zero, +)
+        let totals = try ApiEquivalentTotals.sum(byDay.values)
         var warnings = unknown.sorted().map { "unknown-model:\($0)" }
         if diagnostics.oversizedLines > 0 {
             warnings.append("oversized-jsonl-lines:\(diagnostics.oversizedLines)")
@@ -154,7 +155,7 @@ public struct UsageCostScanner: Sendable {
             guard window.contains(record.timestamp) else { return }
             guard let usage = record.lastTokenUsage else { return }
             let model = record.model ?? currentModel
-            byModel[model, default: .zero] = byModel[model, default: .zero] + usage
+            byModel[model, default: .zero] = try byModel[model, default: .zero].adding(usage)
             if PricingTable.price(for: model) == nil { unknown.insert(model) }
         }
         record(result: result, diagnostics: &diagnostics)
@@ -184,12 +185,16 @@ public struct UsageCostScanner: Sendable {
             guard window.contains(record.timestamp) else { return }
             guard let usage = record.lastTokenUsage else { return }
             let model = record.model ?? currentModel
-            let totals = ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
+            let totals = try ApiEquivalentTotals(validating: usage, turns: 1, threads: 0)
             let day = record.utcDay
-            byModel[model, default: .zero] = byModel[model, default: .zero] + totals
-            byProject[currentProject, default: .zero] = byProject[currentProject, default: .zero] + totals
-            byDay[day, default: .zero] = byDay[day, default: .zero] + totals
-            byDayModel[day, default: [:]][model, default: .zero] = byDayModel[day, default: [:]][model, default: .zero] + totals
+            byModel[model, default: .zero] = try byModel[model, default: .zero].adding(totals)
+            byProject[currentProject, default: .zero] = try byProject[currentProject, default: .zero]
+                .adding(totals)
+            byDay[day, default: .zero] = try byDay[day, default: .zero].adding(totals)
+            byDayModel[day, default: [:]][model, default: .zero] = try byDayModel[
+                day,
+                default: [:]
+            ][model, default: .zero].adding(totals)
             if PricingTable.price(for: model) == nil { unknown.insert(model) }
         }
         record(result: result, diagnostics: &diagnostics)
@@ -255,10 +260,18 @@ public struct UsageCostScanner: Sendable {
 }
 
 extension ApiEquivalentTotals {
-    init(usage: TokenUsage, turns: Int, threads: Int) {
-        let uncached = max(0, usage.inputTokens - usage.cachedInputTokens)
+    init(validating usage: TokenUsage, turns: Int, threads: Int) throws {
+        guard usage.inputTokens >= 0,
+              usage.cachedInputTokens >= 0,
+              usage.outputTokens >= 0,
+              usage.cachedInputTokens <= usage.inputTokens,
+              turns >= 0,
+              threads >= 0
+        else { throw UsageCostArithmeticError.invalidValue(field: "token usage") }
+        let uncached = usage.inputTokens - usage.cachedInputTokens
+        let input = try checkedAdd(uncached, usage.cachedInputTokens, field: "input tokens")
         self.init(
-            totalTokens: uncached + usage.cachedInputTokens + usage.outputTokens,
+            totalTokens: try checkedAdd(input, usage.outputTokens, field: "total tokens"),
             uncachedInputTokens: uncached,
             cachedInputTokens: usage.cachedInputTokens,
             outputTokens: usage.outputTokens,

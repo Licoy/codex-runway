@@ -12,7 +12,6 @@ struct UsageCostSourceIndexer {
     func rebuild(
         file: UsageCostSourceFile,
         existing: UsageCostIndexedSource?,
-        knownFullHash: Data?,
         diagnostics: inout UsageCostRepositoryDiagnostics
     ) throws -> UsageCostScanAnomalies {
         let initial = initialSource(file: file, id: existing?.id)
@@ -27,7 +26,6 @@ struct UsageCostSourceIndexer {
                 model: "unknown-model",
                 project: SessionProjectName.unknown,
                 existing: nil,
-                knownFullHash: knownFullHash,
                 emit: emit)
             metrics = scanned.metrics
             return scanned.source
@@ -56,7 +54,6 @@ struct UsageCostSourceIndexer {
                 model: existing.currentModel,
                 project: existing.currentProject,
                 existing: existing,
-                knownFullHash: nil,
                 emit: emit)
             metrics = scanned.metrics
             return scanned.source
@@ -69,13 +66,41 @@ struct UsageCostSourceIndexer {
 
     func adopt(
         file: UsageCostSourceFile,
-        existing: UsageCostIndexedSource,
-        fullHash: Data?
+        existing: UsageCostIndexedSource
     ) throws {
         var adopted = existing
         adopted.applyMetadata(from: file)
-        if let fullHash { adopted.fullHash = fullHash }
         try store.adoptSource(adopted)
+    }
+
+    func canAdopt(
+        file: UsageCostSourceFile,
+        existing: UsageCostIndexedSource,
+        diagnostics: inout UsageCostRepositoryDiagnostics
+    ) throws -> Bool {
+        guard file.size == existing.size,
+              existing.completeOffset == existing.size,
+              let fingerprint = existing.contentFingerprint
+        else { return false }
+        let result: UsageCostLogStreamResult
+        do {
+            result = try stream.read(
+                file: file.url,
+                expectedSource: file,
+                requireStableSnapshot: true) { _ in }
+        } catch UsageCostLogReaderError.sourceMetadataChanged {
+            return false
+        }
+        diagnostics.validationBytesRead += result.bytesRead
+        diagnostics.maxBufferedBytes = max(diagnostics.maxBufferedBytes, result.maxBufferedBytes)
+        let malformed = result.malformedCandidateLines
+            - result.incompleteMalformedCandidateLines
+        let oversized = result.oversizedLines - result.incompleteOversizedLines
+        return result.snapshotSize == file.size
+            && result.lastCompleteOffset == result.snapshotSize
+            && result.contentFingerprint == fingerprint
+            && malformed == existing.malformedLines
+            && oversized == existing.oversizedLines
     }
 
     func canAppend(
@@ -84,6 +109,7 @@ struct UsageCostSourceIndexer {
         diagnostics: inout UsageCostRepositoryDiagnostics
     ) throws -> Bool {
         guard existing.completeOffset <= file.size,
+              existing.contentFingerprint != nil,
               existing.firstHashLength >= 0,
               existing.checkpointHashLength >= 0,
               UInt64(existing.firstHashLength) <= file.size,
@@ -120,7 +146,6 @@ struct UsageCostSourceIndexer {
         model: String,
         project: String,
         existing: UsageCostIndexedSource?,
-        knownFullHash: Data?,
         emit: UsageCostIndexStore.EventEmitter
     ) throws -> (source: UsageCostIndexedSource, metrics: ScanMetrics) {
         var currentModel = model
@@ -130,6 +155,7 @@ struct UsageCostSourceIndexer {
         let result = try stream.read(
             file: file.url,
             fromOffset: fromOffset,
+            initialFingerprint: existing?.contentFingerprint,
             expectedSource: file) { line in
             let record = line.record
             if let cwd = record.sessionCWD {
@@ -176,12 +202,18 @@ struct UsageCostSourceIndexer {
         source.firstHashLength = hashes.first.length
         source.checkpointHash = hashes.checkpoint.digest
         source.checkpointHashLength = hashes.checkpoint.length
-        source.malformedLines = (existing?.malformedLines ?? 0)
-            + result.malformedCandidateLines - result.incompleteMalformedCandidateLines
-        source.oversizedLines = (existing?.oversizedLines ?? 0)
-            + result.oversizedLines - result.incompleteOversizedLines
-        source.fullHash = knownFullHash.flatMap { file.size == result.snapshotSize ? $0 : nil }
-            ?? result.fullHash
+        let malformedLines = result.malformedCandidateLines
+            - result.incompleteMalformedCandidateLines
+        let oversizedLines = result.oversizedLines - result.incompleteOversizedLines
+        source.malformedLines = try checkedAdd(
+            existing?.malformedLines ?? 0,
+            malformedLines,
+            field: "malformed line count")
+        source.oversizedLines = try checkedAdd(
+            existing?.oversizedLines ?? 0,
+            oversizedLines,
+            field: "oversized line count")
+        source.contentFingerprint = result.contentFingerprint
         let metrics = ScanMetrics(stream: result, hashBytes: hashes.bytesRead)
         return (source, metrics)
     }
@@ -218,7 +250,7 @@ struct UsageCostSourceIndexer {
             completeOffset: 0, currentModel: "unknown-model",
             currentProject: SessionProjectName.unknown, firstHash: Self.emptyHash, firstHashLength: 0,
             checkpointHash: Self.emptyHash, checkpointHashLength: 0, parserVersion: parserVersion,
-            malformedLines: 0, oversizedLines: 0, fullHash: nil)
+            malformedLines: 0, oversizedLines: 0, contentFingerprint: nil)
     }
 }
 
@@ -265,9 +297,16 @@ struct UsageCostScanAnomalies: Equatable {
 
     static let zero = UsageCostScanAnomalies(malformedLines: 0, oversizedLines: 0)
 
-    static func += (lhs: inout UsageCostScanAnomalies, rhs: UsageCostScanAnomalies) {
-        lhs.malformedLines += rhs.malformedLines
-        lhs.oversizedLines += rhs.oversizedLines
+    func adding(_ other: UsageCostScanAnomalies) throws -> UsageCostScanAnomalies {
+        UsageCostScanAnomalies(
+            malformedLines: try checkedAdd(
+                malformedLines,
+                other.malformedLines,
+                field: "malformed line count"),
+            oversizedLines: try checkedAdd(
+                oversizedLines,
+                other.oversizedLines,
+                field: "oversized line count"))
     }
 }
 

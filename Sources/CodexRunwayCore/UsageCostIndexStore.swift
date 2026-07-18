@@ -112,14 +112,20 @@ final class UsageCostIndexStore {
         let sql = """
             SELECT 1 FROM usage_events
             WHERE typeof(file_id) != 'integer'
+               OR file_id <= 0
                OR typeof(byte_offset) != 'integer'
+               OR byte_offset < 0
                OR typeof(timestamp) NOT IN ('real', 'integer')
+               OR timestamp NOT BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308
                OR typeof(utc_day) != 'text'
                OR typeof(model) != 'text'
                OR typeof(project) != 'text'
                OR typeof(uncached_input_tokens) != 'integer'
+               OR uncached_input_tokens < 0
                OR typeof(cached_input_tokens) != 'integer'
+               OR cached_input_tokens < 0
                OR typeof(output_tokens) != 'integer'
+               OR output_tokens < 0
             LIMIT 1
             """
         try database.withStatement(sql, operation: "validate usage event storage") { statement in

@@ -7,10 +7,10 @@ enum UsageCostSummaryBuilder {
         calculatedAt: Date,
         priceBook: UsageCostPriceBook,
         warnings: [String] = []
-    ) -> ApiEquivalentSummary {
-        let groups = group(events)
+    ) throws -> ApiEquivalentSummary {
+        let groups = try group(events)
         let modelRows = modelRows(groups.byModel, priceBook: priceBook)
-        let totals = groups.byDay.values.reduce(.zero, +)
+        let totals = try ApiEquivalentTotals.sum(groups.byDay.values)
         let unknownWarnings = groups.byModel.keys
             .filter { priceBook.priceForModel($0) == nil }
             .sorted()
@@ -38,21 +38,37 @@ enum UsageCostSummaryBuilder {
         var byDayModel: [String: [String: ApiEquivalentTotals]] = [:]
     }
 
-    private static func group(_ events: [UsageCostIndexedEvent]) -> Groups {
-        events.reduce(into: Groups()) { result, event in
+    private static func group(_ events: [UsageCostIndexedEvent]) throws -> Groups {
+        var result = Groups()
+        for event in events {
+            let input = try checkedAdd(
+                event.uncachedInputTokens,
+                event.cachedInputTokens,
+                field: "input tokens")
             let totals = ApiEquivalentTotals(
-                totalTokens: event.uncachedInputTokens + event.cachedInputTokens + event.outputTokens,
+                totalTokens: try checkedAdd(input, event.outputTokens, field: "total tokens"),
                 uncachedInputTokens: event.uncachedInputTokens,
                 cachedInputTokens: event.cachedInputTokens,
                 outputTokens: event.outputTokens,
                 turns: event.turns,
                 threads: 0)
-            result.byModel[event.model, default: .zero] = result.byModel[event.model, default: .zero] + totals
-            result.byProject[event.project, default: .zero] = result.byProject[event.project, default: .zero] + totals
-            result.byDay[event.utcDay, default: .zero] = result.byDay[event.utcDay, default: .zero] + totals
+            result.byModel[event.model, default: .zero] = try result.byModel[
+                event.model,
+                default: .zero
+            ].adding(totals)
+            result.byProject[event.project, default: .zero] = try result.byProject[
+                event.project,
+                default: .zero
+            ].adding(totals)
+            result.byDay[event.utcDay, default: .zero] = try result.byDay[
+                event.utcDay,
+                default: .zero
+            ].adding(totals)
             result.byDayModel[event.utcDay, default: [:]][event.model, default: .zero] =
-                result.byDayModel[event.utcDay, default: [:]][event.model, default: .zero] + totals
+                try result.byDayModel[event.utcDay, default: [:]][event.model, default: .zero]
+                    .adding(totals)
         }
+        return result
     }
 
     private static func modelRows(

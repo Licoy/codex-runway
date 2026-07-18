@@ -29,17 +29,7 @@ public struct ApiEquivalentTotals: Codable, Sendable, Equatable {
         threads: 0)
 
     public var hasTokenParts: Bool {
-        uncachedInputTokens + cachedInputTokens + outputTokens > 0
-    }
-
-    public static func + (lhs: ApiEquivalentTotals, rhs: ApiEquivalentTotals) -> ApiEquivalentTotals {
-        ApiEquivalentTotals(
-            totalTokens: lhs.totalTokens + rhs.totalTokens,
-            uncachedInputTokens: lhs.uncachedInputTokens + rhs.uncachedInputTokens,
-            cachedInputTokens: lhs.cachedInputTokens + rhs.cachedInputTokens,
-            outputTokens: lhs.outputTokens + rhs.outputTokens,
-            turns: lhs.turns + rhs.turns,
-            threads: lhs.threads + rhs.threads)
+        uncachedInputTokens > 0 || cachedInputTokens > 0 || outputTokens > 0
     }
 }
 
@@ -165,16 +155,17 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
         let items = response.data
             .filter { $0.date >= start && $0.date <= end }
             .sorted { $0.date < $1.date }
-        let rows = items.map { item -> ApiEquivalentDailyRow in
-            let totals = item.totals?.apiTotals ?? .zero
+        let rows = try items.map { item -> ApiEquivalentDailyRow in
+            let totals = try item.totals?.checkedAPITotals() ?? .zero
             return ApiEquivalentDailyRow(
                 date: item.date,
                 totals: totals,
                 estimatedUSD: totals.hasTokenParts ? PricingTable.equivalentCost(totals: totals) : nil,
                 rawCredits: item.totals?.credits ?? 0)
         }
-        let totals = rows.reduce(.zero) { $0 + $1.totals }
+        let totals = try ApiEquivalentTotals.sum(rows.map(\.totals))
         let estimated = rows.compactMap(\.estimatedUSD).reduce(Decimal(0), +)
+        let rawCredits = try checkedFiniteSum(rows.map(\.rawCredits), field: "analytics credits")
         return ApiEquivalentSummary(
             source: .onlineAnalytics,
             confidence: totals.hasTokenParts ? .priced : (totals.totalTokens > 0 ? .tokensOnly : .unavailable),
@@ -182,10 +173,10 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
             estimatedUSD: totals.hasTokenParts ? estimated : nil,
             totals: totals,
             dailyRows: rows,
-            modelRows: breakdown(items.flatMap(\.models)),
+            modelRows: try breakdown(items.flatMap(\.models)),
             projectRows: [],
-            clientRows: breakdown(items.flatMap(\.clients)),
-            rawCredits: rows.reduce(0) { $0 + $1.rawCredits },
+            clientRows: try breakdown(items.flatMap(\.clients)),
+            rawCredits: rawCredits,
             warnings: totals.hasTokenParts ? [] : ["analytics-token-parts-missing"],
             pricingVersion: PricingTable.version,
             calculatedAt: calculatedAt)
@@ -200,15 +191,20 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
         return formatter.string(from: date)
     }
 
-    private static func breakdown(_ items: [ApiAnalyticsBreakdownItem]) -> [ApiEquivalentBreakdownRow] {
+    private static func breakdown(
+        _ items: [ApiAnalyticsBreakdownItem]
+    ) throws -> [ApiEquivalentBreakdownRow] {
         let grouped = Dictionary(grouping: items) { $0.displayName }
-        return grouped.map { name, values in
-            let totals = values.map(\.apiTotals).reduce(.zero, +)
+        return try grouped.map { name, values in
+            let totals = try ApiEquivalentTotals.sum(values.map { try $0.checkedAPITotals() })
+            let rawCredits = try checkedFiniteSum(
+                values.map(\.credits),
+                field: "analytics breakdown credits")
             return ApiEquivalentBreakdownRow(
                 name: name,
                 totals: totals,
                 estimatedUSD: totals.hasTokenParts ? PricingTable.equivalentCost(totals: totals) : nil,
-                rawCredits: values.reduce(0) { $0 + $1.credits })
+                rawCredits: rawCredits)
         }
         .filter { $0.totals.totalTokens > 0 || $0.totals.turns > 0 || $0.rawCredits > 0 }
         .sorted { $0.totals.totalTokens > $1.totals.totalTokens }
@@ -234,10 +230,14 @@ private struct ApiAnalyticsDay: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        date = (try? container.decode(String.self, forKey: .date)) ?? ""
-        totals = try? container.decodeIfPresent(ApiAnalyticsTotals.self, forKey: .totals)
-        models = (try? container.decodeIfPresent([ApiAnalyticsBreakdownItem].self, forKey: .models)) ?? []
-        clients = (try? container.decodeIfPresent([ApiAnalyticsBreakdownItem].self, forKey: .clients)) ?? []
+        date = try container.decode(String.self, forKey: .date)
+        totals = try container.decodeIfPresent(ApiAnalyticsTotals.self, forKey: .totals)
+        models = try container.decodeIfPresent(
+            [ApiAnalyticsBreakdownItem].self,
+            forKey: .models) ?? []
+        clients = try container.decodeIfPresent(
+            [ApiAnalyticsBreakdownItem].self,
+            forKey: .clients) ?? []
     }
 }
 
@@ -268,7 +268,7 @@ private struct ApiAnalyticsBreakdownItem: Decodable {
         firstNonEmpty(clientID, model, name, id) ?? "UNKNOWN"
     }
 
-    var apiTotals: ApiEquivalentTotals { totals.apiTotals }
+    func checkedAPITotals() throws -> ApiEquivalentTotals { try totals.checkedAPITotals() }
     var credits: Double { totals.credits }
 }
 
@@ -293,17 +293,28 @@ private struct ApiAnalyticsTotals: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        credits = container.flexibleDouble(.credits)
-        turns = container.flexibleInt(.turns)
-        threads = container.flexibleInt(.threads)
-        textTotalTokens = container.flexibleInt(.textTotalTokens)
-        cachedTextInputTokens = container.flexibleInt(.cachedTextInputTokens)
-        uncachedTextInputTokens = container.flexibleInt(.uncachedTextInputTokens)
-        textOutputTokens = container.flexibleInt(.textOutputTokens)
+        credits = try container.flexibleDouble(.credits)
+        turns = try container.flexibleInt(.turns)
+        threads = try container.flexibleInt(.threads)
+        textTotalTokens = try container.flexibleInt(.textTotalTokens)
+        cachedTextInputTokens = try container.flexibleInt(.cachedTextInputTokens)
+        uncachedTextInputTokens = try container.flexibleInt(.uncachedTextInputTokens)
+        textOutputTokens = try container.flexibleInt(.textOutputTokens)
     }
 
-    var apiTotals: ApiEquivalentTotals {
-        let parts = uncachedTextInputTokens + cachedTextInputTokens + textOutputTokens
+    func checkedAPITotals() throws -> ApiEquivalentTotals {
+        guard turns >= 0,
+              threads >= 0,
+              textTotalTokens >= 0,
+              cachedTextInputTokens >= 0,
+              uncachedTextInputTokens >= 0,
+              textOutputTokens >= 0
+        else { throw UsageCostArithmeticError.invalidValue(field: "analytics token usage") }
+        let input = try checkedAdd(
+            uncachedTextInputTokens,
+            cachedTextInputTokens,
+            field: "analytics input tokens")
+        let parts = try checkedAdd(input, textOutputTokens, field: "analytics total tokens")
         return ApiEquivalentTotals(
             totalTokens: textTotalTokens > 0 ? textTotalTokens : parts,
             uncachedInputTokens: uncachedTextInputTokens,
@@ -315,17 +326,39 @@ private struct ApiAnalyticsTotals: Decodable {
 }
 
 private extension KeyedDecodingContainer where Key == ApiAnalyticsTotals.CodingKeys {
-    func flexibleInt(_ key: Key) -> Int {
+    func flexibleInt(_ key: Key) throws -> Int {
+        guard contains(key), try !decodeNil(forKey: key) else { return 0 }
         if let value = try? decode(Int.self, forKey: key) { return value }
-        if let value = try? decode(Double.self, forKey: key) { return Int(value) }
-        if let value = try? decode(String.self, forKey: key) { return Int(value) ?? 0 }
-        return 0
+        if let value = try? decode(Double.self, forKey: key),
+           value.isFinite,
+           let exact = Int(exactly: value)
+        {
+            return exact
+        }
+        if let value = try? decode(String.self, forKey: key),
+           let exact = Int(value)
+        {
+            return exact
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: self,
+            debugDescription: "Expected an exact finite integer")
     }
 
-    func flexibleDouble(_ key: Key) -> Double {
-        if let value = try? decode(Double.self, forKey: key) { return value }
+    func flexibleDouble(_ key: Key) throws -> Double {
+        guard contains(key), try !decodeNil(forKey: key) else { return 0 }
+        if let value = try? decode(Double.self, forKey: key), value.isFinite { return value }
         if let value = try? decode(Int.self, forKey: key) { return Double(value) }
-        if let value = try? decode(String.self, forKey: key) { return Double(value) ?? 0 }
-        return 0
+        if let text = try? decode(String.self, forKey: key),
+           let value = Double(text),
+           value.isFinite
+        {
+            return value
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: self,
+            debugDescription: "Expected a finite number")
     }
 }

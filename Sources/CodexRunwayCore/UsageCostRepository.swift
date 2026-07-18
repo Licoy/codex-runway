@@ -18,6 +18,7 @@ public enum UsageCostRefreshPolicy: Sendable, Hashable {
 enum UsageCostRepositoryError: Error, Equatable, Sendable {
     case duplicateConflict(basename: String)
     case duplicateQueryID(String)
+    case invalidQueryWindow(String)
 }
 
 struct UsageCostPriceBook: Sendable {
@@ -142,7 +143,7 @@ public actor UsageCostRepository {
     ) async throws -> [String: ApiEquivalentSummary] {
         try Task.checkCancellation()
         guard !queries.isEmpty else { return [:] }
-        try Self.validateQueryIDs(queries)
+        try Self.validateQueries(queries)
         let canonicalQueries = queries.sorted(by: Self.queryOrder)
         let key = RequestKey(
             queries: canonicalQueries,
@@ -223,10 +224,15 @@ public actor UsageCostRepository {
             .appendingPathComponent(".codex-runway/usage-cost-index-v1.sqlite3")
     }
 
-    private static func validateQueryIDs(_ queries: [ApiCostQuery]) throws {
+    private static func validateQueries(_ queries: [ApiCostQuery]) throws {
         var identifiers = Set<String>()
-        for query in queries where !identifiers.insert(query.id).inserted {
-            throw UsageCostRepositoryError.duplicateQueryID(query.id)
+        for query in queries {
+            guard query.window.start.timeIntervalSince1970.isFinite,
+                  query.window.end.timeIntervalSince1970.isFinite
+            else { throw UsageCostRepositoryError.invalidQueryWindow(query.id) }
+            guard identifiers.insert(query.id).inserted else {
+                throw UsageCostRepositoryError.duplicateQueryID(query.id)
+            }
         }
     }
 

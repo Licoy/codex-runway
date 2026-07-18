@@ -114,6 +114,38 @@ struct UsageCostRepositoryAggregationTests {
         #expect(diagnostics.malformedCandidateLines == 2)
     }
 
+    @Test("cross-record token overflow throws instead of trapping")
+    func crossRecordOverflowThrows() async throws {
+        let fixture = try RepositoryFixture()
+        let contents = [
+            tokenLine(
+                timestamp: "2026-06-29T01:00:00Z",
+                input: Int.max,
+                output: 0,
+                model: "gpt-5.5"),
+            tokenLine(
+                timestamp: "2026-06-29T02:00:00Z",
+                input: 1,
+                output: 0,
+                model: "unknown-model"),
+        ].joined(separator: "\n") + "\n"
+        try fixture.write(contents, basename: "rollout-aggregate-overflow.jsonl")
+        let request = fullWindowQuery()
+
+        #expect(throws: UsageCostArithmeticError.self) {
+            _ = try UsageCostScanner(codexHome: fixture.codexHome).scanAPIEquivalent(
+                window: request.window,
+                calculatedAt: fixedNow)
+        }
+        do {
+            _ = try await fixture.repository().summaries(
+                for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+            Issue.record("Expected repository aggregation overflow")
+        } catch is UsageCostArithmeticError {
+            // Expected.
+        }
+    }
+
     @Test("duplicate query identifiers fail instead of overwriting a result")
     func duplicateQueryIdentifiersFail() async throws {
         let fixture = try RepositoryFixture()
@@ -128,6 +160,28 @@ struct UsageCostRepositoryAggregationTests {
             Issue.record("Expected duplicate query identifier failure")
         } catch UsageCostRepositoryError.duplicateQueryID(let identifier) {
             #expect(identifier == duplicate.id)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("non-finite query windows fail explicitly")
+    func nonFiniteQueryWindowFails() async throws {
+        let fixture = try RepositoryFixture()
+        let invalid = ApiCostQuery(
+            id: "invalid-window",
+            window: DateInterval(
+                start: Date(timeIntervalSince1970: .nan),
+                end: fixedNow))
+
+        do {
+            _ = try await fixture.repository().summaries(
+                for: [invalid],
+                calculatedAt: fixedNow,
+                policy: .ifChanged)
+            Issue.record("Expected invalid query window failure")
+        } catch UsageCostRepositoryError.invalidQueryWindow(let identifier) {
+            #expect(identifier == invalid.id)
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
