@@ -34,7 +34,7 @@ final class UsageCostLogParser {
             model: turnContext?.model ?? payload?.model,
             contextModel: contextModel,
             sessionCWD: payload?.cwd ?? turnContext?.cwd,
-            lastTokenUsage: payload?.info?.lastTokenUsage?.usage)
+            lastTokenUsage: try payload?.info?.lastTokenUsage?.decodedUsage())
     }
 
     private func parseTimestamp(_ text: String) -> ParsedTimestamp? {
@@ -153,11 +153,23 @@ private struct EncodedTokenUsage: Decodable {
     var outputTokens: Int?
     var reasoningOutputTokens: Int?
 
-    var usage: TokenUsage {
-        TokenUsage(
-            inputTokens: inputTokens ?? 0,
-            cachedInputTokens: cachedInputTokens ?? 0,
-            outputTokens: (outputTokens ?? 0) + (reasoningOutputTokens ?? 0))
+    func decodedUsage() throws -> TokenUsage {
+        let input = inputTokens ?? 0
+        let cached = cachedInputTokens ?? 0
+        let output = outputTokens ?? 0
+        let reasoning = reasoningOutputTokens ?? 0
+        guard input >= 0, cached >= 0, output >= 0, reasoning >= 0, cached <= input else {
+            throw UsageCostLogParserError.invalidTokenUsage
+        }
+        let (combinedOutput, outputOverflow) = output.addingReportingOverflow(reasoning)
+        let (_, totalOverflow) = input.addingReportingOverflow(combinedOutput)
+        guard !outputOverflow, !totalOverflow else {
+            throw UsageCostLogParserError.invalidTokenUsage
+        }
+        return TokenUsage(
+            inputTokens: input,
+            cachedInputTokens: cached,
+            outputTokens: combinedOutput)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -166,4 +178,8 @@ private struct EncodedTokenUsage: Decodable {
         case outputTokens = "output_tokens"
         case reasoningOutputTokens = "reasoning_output_tokens"
     }
+}
+
+private enum UsageCostLogParserError: Error {
+    case invalidTokenUsage
 }

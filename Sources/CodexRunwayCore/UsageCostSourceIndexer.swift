@@ -138,6 +138,9 @@ struct UsageCostSourceIndexer {
             if let contextModel = record.contextModel { currentModel = contextModel }
             if let usage = record.lastTokenUsage {
                 let cached = max(0, usage.cachedInputTokens)
+                let uncached = usage.inputTokens >= cached
+                    ? usage.inputTokens - cached
+                    : 0
                 try emit(UsageCostIndexedEvent(
                     fileID: existing?.id,
                     byteOffset: line.byteOffset,
@@ -145,7 +148,7 @@ struct UsageCostSourceIndexer {
                     utcDay: record.utcDay,
                     model: record.model ?? currentModel,
                     project: currentProject,
-                    uncachedInputTokens: max(0, usage.inputTokens - cached),
+                    uncachedInputTokens: uncached,
                     cachedInputTokens: cached,
                     outputTokens: max(0, usage.outputTokens)))
             }
@@ -178,6 +181,7 @@ struct UsageCostSourceIndexer {
         source.oversizedLines = (existing?.oversizedLines ?? 0)
             + result.oversizedLines - result.incompleteOversizedLines
         source.fullHash = knownFullHash.flatMap { file.size == result.snapshotSize ? $0 : nil }
+            ?? result.fullHash
         let metrics = ScanMetrics(stream: result, hashBytes: hashes.bytesRead)
         return (source, metrics)
     }

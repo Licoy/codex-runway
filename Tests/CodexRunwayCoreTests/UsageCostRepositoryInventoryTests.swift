@@ -59,8 +59,16 @@ struct UsageCostRepositoryInventoryTests {
     @Test("same-size rewrite followed by a move rebuilds stale events")
     func rewrittenMoveIsNotBlindlyAdopted() async throws {
         let fixture = try RepositoryFixture()
-        let originalText = tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 100) + "\n"
-        let changedText = tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 900) + "\n"
+        let prefix = #"{"type":"event_msg","payload":{"type":"message","content":""#
+            + String(repeating: "p", count: 20 * 1_024) + #""}}"# + "\n"
+        let suffix = #"{"type":"event_msg","payload":{"type":"message","content":""#
+            + String(repeating: "s", count: 20 * 1_024) + #""}}"# + "\n"
+        let originalText = prefix
+            + tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 100) + "\n"
+            + suffix
+        let changedText = prefix
+            + tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 900) + "\n"
+            + suffix
         #expect(originalText.utf8.count == changedText.utf8.count)
         let original = try fixture.write(originalText, basename: "rollout-rewritten-move.jsonl")
         let originalMTime = try #require(

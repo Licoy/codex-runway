@@ -108,6 +108,27 @@ final class UsageCostIndexStore {
         }
     }
 
+    func validateEventStorage() throws {
+        let sql = """
+            SELECT 1 FROM usage_events
+            WHERE typeof(file_id) != 'integer'
+               OR typeof(byte_offset) != 'integer'
+               OR typeof(timestamp) NOT IN ('real', 'integer')
+               OR typeof(utc_day) != 'text'
+               OR typeof(model) != 'text'
+               OR typeof(project) != 'text'
+               OR typeof(uncached_input_tokens) != 'integer'
+               OR typeof(cached_input_tokens) != 'integer'
+               OR typeof(output_tokens) != 'integer'
+            LIMIT 1
+            """
+        try database.withStatement(sql, operation: "validate usage event storage") { statement in
+            if try statement.step() {
+                throw UsageCostIndexStoreError.corruptRow(field: "usage event storage")
+            }
+        }
+    }
+
     private func initializeSchema() throws {
         guard try hasTable(named: "index_metadata") else {
             if try hasUserTables() {
@@ -202,17 +223,7 @@ final class UsageCostIndexStore {
     private func validateStorage() throws {
         _ = try sourceRows()
         _ = try sourceHashCacheRows()
-        try database.withStatement(
-            """
-            SELECT file_id, byte_offset, timestamp, utc_day, model, project,
-                   uncached_input_tokens, cached_input_tokens, output_tokens
-            FROM usage_events LIMIT 0
-            """,
-            operation: "validate usage event schema") { statement in
-            guard try !statement.step() else {
-                throw UsageCostIndexStoreError.corruptRow(field: "event schema")
-            }
-        }
+        try validateEventStorage()
     }
 
     private func upsert(_ source: UsageCostIndexedSource) throws -> Int64 {

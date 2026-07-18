@@ -236,6 +236,33 @@ struct CostScannerTests {
         #expect(report.summary.warnings.contains("oversized-jsonl-lines:1"))
     }
 
+    @Test("rejects invalid or overflowing token counts without trapping")
+    func rejectsInvalidTokenCounts() throws {
+        let root = try TemporaryDirectory()
+        let sessionDir = root.url.appending(path: "sessions/2026/06/29", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let usagePrefix = #"{"timestamp":"2026-06-29T00:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"#
+        let usageSuffix = #"}}},"turn_context":{"model":"gpt-5.5"}}"#
+        let lines = [
+            usagePrefix + "\"input_tokens\":\(Int.min),\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0" + usageSuffix,
+            usagePrefix + "\"input_tokens\":1,\"cached_input_tokens\":2,\"output_tokens\":0,\"reasoning_output_tokens\":0" + usageSuffix,
+            usagePrefix + "\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":\(Int.max),\"reasoning_output_tokens\":1" + usageSuffix,
+            usagePrefix + "\"input_tokens\":100,\"cached_input_tokens\":20,\"output_tokens\":5,\"reasoning_output_tokens\":2" + usageSuffix,
+        ]
+        try Data((lines.joined(separator: "\n") + "\n").utf8)
+            .write(to: sessionDir.appending(path: "rollout-invalid-token-counts.jsonl"))
+
+        let report = try UsageCostScanner(codexHome: root.url).scanAPIEquivalentReport(
+            window: DateInterval(
+                start: ISO8601DateFormatter().date(from: "2026-06-29T00:00:00Z")!,
+                end: ISO8601DateFormatter().date(from: "2026-06-30T00:00:00Z")!))
+
+        #expect(report.summary.totals.totalTokens == 107)
+        #expect(report.summary.totals.turns == 1)
+        #expect(report.diagnostics.malformedCandidateLines == 3)
+        #expect(report.diagnostics.decodedLines == 1)
+    }
+
     @Test("stream checkpoints only LF-complete records and can reread a final partial record")
     func streamCheckpointDefersFinalRecord() throws {
         let root = try TemporaryDirectory()
@@ -700,7 +727,7 @@ struct CostScannerTests {
             clientRows: [],
             rawCredits: 0,
             warnings: [],
-            pricingVersion: "test",
+            pricingVersion: PricingTable.version,
             calculatedAt: calculatedAt)
         let store = UsageCostCacheStore(cacheURL: cacheURL)
 
@@ -708,6 +735,30 @@ struct CostScannerTests {
         let loaded = try #require(store.load())
 
         #expect(loaded == summary)
+    }
+
+    @Test("cost cache rejects a stale pricing version")
+    func costCacheRejectsStalePricingVersion() throws {
+        let root = try TemporaryDirectory()
+        let cacheURL = root.url.appending(path: "api-equivalent-cost.json")
+        let store = UsageCostCacheStore(cacheURL: cacheURL)
+        let summary = ApiEquivalentSummary(
+            source: .localSessions,
+            confidence: .priced,
+            window: DateInterval(start: Date(timeIntervalSince1970: 0), duration: 60),
+            estimatedUSD: 1,
+            totals: .zero,
+            dailyRows: [],
+            modelRows: [],
+            clientRows: [],
+            rawCredits: 0,
+            warnings: [],
+            pricingVersion: "stale-pricing-version",
+            calculatedAt: Date(timeIntervalSince1970: 60))
+
+        try store.save(summary)
+
+        #expect(store.load() == nil)
     }
 
     @Test("cost cache ignores missing or corrupt files")

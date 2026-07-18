@@ -88,6 +88,32 @@ struct UsageCostRepositoryAggregationTests {
         #expect(summary.dailyRows.map(\.totals.totalTokens) == [105, 205])
     }
 
+    @Test("invalid token counts are reported and skipped")
+    func invalidTokenCountsAreReported() async throws {
+        let fixture = try RepositoryFixture()
+        let overflow = """
+        {"timestamp":"2026-06-29T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":\(Int.max),"reasoning_output_tokens":1}}}}
+        """
+        try fixture.write(
+            [
+                tokenLine(timestamp: "2026-06-29T01:00:00Z", input: Int.min),
+                overflow,
+                tokenLine(timestamp: "2026-06-29T02:00:00Z", input: 100),
+            ].joined(separator: "\n") + "\n",
+            basename: "rollout-invalid-token-counts.jsonl")
+        let repository = fixture.repository()
+        let request = fullWindowQuery()
+
+        let summary = try #require(try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)[request.id])
+        let diagnostics = await repository.diagnosticsSnapshot()
+
+        #expect(summary.totals.turns == 1)
+        #expect(summary.totals.totalTokens == 105)
+        #expect(summary.warnings.contains("malformed-jsonl-lines:2"))
+        #expect(diagnostics.malformedCandidateLines == 2)
+    }
+
     @Test("duplicate query identifiers fail instead of overwriting a result")
     func duplicateQueryIdentifiersFail() async throws {
         let fixture = try RepositoryFixture()

@@ -14,6 +14,7 @@ struct ApiCostDetailView: View {
     @State private var transientRange: ApiCostRangeMode?
     @State private var queryError: String?
     @State private var didQueryInitialRange = false
+    @State private var pendingQuery: ApiCostDetailQuery?
 
     init(model: RunwayModel, l10n: L10n, initialRange: ApiCostSummaryRange = .today) {
         self.model = model
@@ -40,6 +41,10 @@ struct ApiCostDetailView: View {
             guard !didQueryInitialRange else { return }
             didQueryInitialRange = true
             rangeChanged(selectedRange)
+        }
+        .task(id: pendingQuery?.id) {
+            guard let pendingQuery, !Task.isCancelled else { return }
+            await queryCost(pendingQuery)
         }
     }
 
@@ -107,7 +112,6 @@ struct ApiCostDetailView: View {
         }
         .background(RunwaySurface.fill, in: RoundedRectangle(cornerRadius: 8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .disabled(isLoading)
         .frame(maxWidth: .infinity)
     }
 
@@ -234,18 +238,22 @@ struct ApiCostDetailView: View {
         queryError = nil
         switch range {
         case .today:
-            queryCost(ApiCostRange.today(), mode: range)
+            scheduleQuery(ApiCostRange.today(), mode: range)
         case .current:
-            break
+            cancelPendingQuery()
         case .previous:
             guard let costRange = model.previousCycleCostRange() else {
+                cancelPendingQuery()
                 queryError = l10n.text(.usageAnalyticsUnavailable)
                 return
             }
-            queryCost(costRange, mode: range)
+            scheduleQuery(costRange, mode: range)
         case .thisMonth:
-            queryCost(ApiCostRange.thisMonth(), mode: range)
+            scheduleQuery(ApiCostRange.thisMonth(), mode: range)
         case .custom:
+            cancelPendingQuery()
+            transientDetail = nil
+            transientRange = nil
             prepareCustomDates()
         }
     }
@@ -262,23 +270,39 @@ struct ApiCostDetailView: View {
             queryError = l10n.text(.invalidDateRange)
             return
         }
-        queryCost(range, mode: .custom)
+        scheduleQuery(range, mode: .custom)
     }
 
-    private func queryCost(_ range: ApiCostRange, mode: ApiCostRangeMode) {
+    private func scheduleQuery(_ range: ApiCostRange, mode: ApiCostRangeMode) {
         isLoading = true
         queryError = nil
         transientDetail = nil
         transientRange = nil
-        Task { @MainActor in
-            defer { isLoading = false }
-            do {
-                transientDetail = try await model.queryCost(range: range)
-                transientRange = mode
-            } catch {
-                queryError = error is CostRangeQueryError ? l10n.text(.usageAnalyticsUnavailable) : error.localizedDescription
-            }
+        pendingQuery = ApiCostDetailQuery(range: range, mode: mode)
+    }
+
+    private func cancelPendingQuery() {
+        pendingQuery = nil
+        isLoading = false
+    }
+
+    @MainActor
+    private func queryCost(_ query: ApiCostDetailQuery) async {
+        do {
+            let detail = try await model.queryCost(range: query.range)
+            guard isActive(query) else { return }
+            transientDetail = detail
+            transientRange = query.mode
+            isLoading = false
+        } catch {
+            guard isActive(query) else { return }
+            queryError = error is CostRangeQueryError ? l10n.text(.usageAnalyticsUnavailable) : error.localizedDescription
+            isLoading = false
         }
+    }
+
+    private func isActive(_ query: ApiCostDetailQuery) -> Bool {
+        !Task.isCancelled && pendingQuery?.id == query.id
     }
 
     @ViewBuilder
@@ -338,6 +362,12 @@ struct ApiCostDetailView: View {
         if value >= 1_000 { return String(format: "%.2fK", Double(value) / 1_000) }
         return "\(value)"
     }
+}
+
+private struct ApiCostDetailQuery: Equatable {
+    let id = UUID()
+    var range: ApiCostRange
+    var mode: ApiCostRangeMode
 }
 
 private enum ApiCostRangeMode: String, CaseIterable, Identifiable {

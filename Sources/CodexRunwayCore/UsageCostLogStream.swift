@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -33,6 +34,7 @@ struct UsageCostLogStreamResult: Equatable, Sendable {
     var maxBufferedBytes: Int
     var lastCompleteOffset: UInt64
     var trailingLineStartOffset: UInt64?
+    var fullHash: Data?
 }
 
 struct UsageCostLogStream {
@@ -92,7 +94,8 @@ struct UsageCostLogStream {
             incompleteOversizedLines: result.incompleteOversizedLines,
             maxBufferedBytes: result.maxBufferedBytes,
             lastCompleteOffset: result.lastCompleteOffset,
-            trailingLineStartOffset: result.trailingLineStartOffset)
+            trailingLineStartOffset: result.trailingLineStartOffset,
+            fullHash: result.fullHash)
     }
 
 }
@@ -117,6 +120,7 @@ private struct UsageCostLogReadResult {
     var maxBufferedBytes = 0
     var lastCompleteOffset: UInt64
     var trailingLineStartOffset: UInt64?
+    var fullHash: Data?
 }
 
 private enum UsageCostLogReaderError: Error {
@@ -166,6 +170,7 @@ private struct UsageCostLogReader {
         var position = fromOffset
         var bytesRead = 0
         var maxBufferedBytes = 0
+        var fullHasher = fromOffset == 0 ? SHA256() : nil
         while position < snapshotSize {
             try Task.checkCancellation()
             let remaining = snapshotSize - position
@@ -177,6 +182,7 @@ private struct UsageCostLogReader {
                         expected: snapshotSize,
                         actual: position)
                 }
+                fullHasher?.update(data: chunk)
                 maxBufferedBytes = max(maxBufferedBytes, chunk.count)
                 try accumulator.consume(chunk: chunk, at: position, onCandidate: onCandidate)
                 maxBufferedBytes = max(maxBufferedBytes, accumulator.maxBufferedBytes)
@@ -202,7 +208,8 @@ private struct UsageCostLogReader {
             lastCompleteOffset: accumulator.lastCompleteOffset,
             trailingLineStartOffset: accumulator.lastCompleteOffset < snapshotSize
                 ? accumulator.lastCompleteOffset
-                : nil)
+                : nil,
+            fullHash: fullHasher.map { Data($0.finalize()) })
     }
 }
 

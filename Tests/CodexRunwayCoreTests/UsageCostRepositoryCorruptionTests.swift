@@ -81,6 +81,18 @@ struct UsageCostRepositoryCorruptionTests {
         let final = await repository.diagnosticsSnapshot()
         #expect(rebuiltEvents[request.id]?.totals.turns == 1)
         #expect(final.databaseRebuilds == after.databaseRebuilds + 1)
+
+        do {
+            let external = try SQLiteDatabase(url: fixture.databaseURL)
+            try external.execute(
+                "UPDATE usage_events SET timestamp = 'not-a-number'",
+                operation: "test timestamp storage-class corruption")
+        }
+        let rebuiltTimestamp = try await repository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let afterTimestamp = await repository.diagnosticsSnapshot()
+        #expect(rebuiltTimestamp[request.id]?.totals.turns == 1)
+        #expect(afterTimestamp.databaseRebuilds == final.databaseRebuilds + 1)
     }
 
     @Test("ordinary SQLite query errors propagate without deleting the index")

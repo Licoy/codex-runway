@@ -67,6 +67,7 @@ actor UsageCostRepositoryWorker {
             store: opened.store,
             parserVersion: parserVersion)
             .refresh(policy: policy, diagnostics: &diagnostics)
+        try opened.store.validateEventStorage()
         let warnings = opened.warnings + refreshWarnings
         var result = [String: ApiEquivalentSummary](minimumCapacity: queries.count)
         for query in queries {

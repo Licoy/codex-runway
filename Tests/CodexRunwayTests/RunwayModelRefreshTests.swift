@@ -29,11 +29,11 @@ struct RunwayModelRefreshTests {
                 await recorder.record("reset-finish")
                 return ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date())
             },
-            scanAPIEquivalent: { window, now in
+            scanAPIEquivalent: { queries, now, _ in
                 await recorder.record("cost-start")
                 try await Task.sleep(for: .milliseconds(160))
                 await recorder.record("cost-finish")
-                return Self.costSummary(window: window, calculatedAt: now)
+                return Self.costSummaries(for: queries, calculatedAt: now)
             },
             fetchDailyWorkspaceUsage: { _, _, _, window, now in
                 Self.costSummary(window: window, calculatedAt: now)
@@ -72,7 +72,7 @@ struct RunwayModelRefreshTests {
 
     @Test("default API cost summary scans today's range")
     func defaultAPICostSummaryScansToday() async throws {
-        let recorder = CostRangeRecorder()
+        let recorder = CostBatchRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateShowsCostSummary(true)
         let services = Self.costRangeServices(recorder: recorder)
@@ -80,15 +80,44 @@ struct RunwayModelRefreshTests {
 
         model.refreshCost()
 
-        let captured = try await recorder.waitForWindow(count: 2)
+        let captured = try await recorder.waitForBatch()
         let calendar = Calendar.autoupdatingCurrent
-        #expect(captured.window.start == calendar.startOfDay(for: captured.now))
-        #expect(captured.window.end == captured.now)
+        let selected = try #require(captured.queries.first {
+            $0.window.start == calendar.startOfDay(for: captured.now)
+        })
+        #expect(captured.queries.count == 2)
+        #expect(selected.window.end == captured.now)
+        #expect(captured.policy == .force)
+        try await waitForCostRefresh(in: model)
+        #expect(await recorder.captureCount == 1)
+    }
+
+    @Test("if-changed refresh reuses results within the configured interval")
+    func ifChangedRefreshReusesRecentResults() async throws {
+        let recorder = CostBatchRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        let model = RunwayModel(
+            settings: settings,
+            services: Self.costRangeServices(recorder: recorder))
+
+        model.refreshCost(policy: .ifChanged)
+        _ = try await recorder.waitForBatch()
+        try await waitForCostRefresh(in: model)
+
+        model.refreshCost(policy: .ifChanged)
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(await recorder.captureCount == 1)
+        #expect(!model.isRefreshing(.apiCost))
+
+        model.refreshCost(policy: .force)
+        _ = try await recorder.waitForBatch(count: 2)
+        #expect(await recorder.captureCount == 2)
     }
 
     @Test("current cycle API cost summary scans elapsed quota weekly range")
     func currentCycleAPICostSummaryScansQuotaWindow() async throws {
-        let recorder = CostRangeRecorder()
+        let recorder = CostBatchRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateApiCostSummaryRange(.current)
         let quota = Self.quotaSnapshot(secondaryReset: Date().addingTimeInterval(10_080 * 60))
@@ -97,17 +126,23 @@ struct RunwayModelRefreshTests {
 
         model.refreshCost()
 
-        let captured = try await recorder.waitForWindow()
+        let captured = try await recorder.waitForBatch()
         let secondary = try #require(quota.secondary)
         let reset = try #require(secondary.resetsAt)
         let minutes = try #require(secondary.windowMinutes)
-        #expect(captured.window.start == reset.addingTimeInterval(-TimeInterval(minutes * 60)))
-        #expect(captured.window.end == captured.now)
+        let query = try #require(captured.queries.first)
+        let start = reset.addingTimeInterval(-TimeInterval(minutes * 60))
+        #expect(captured.queries.count == 1)
+        #expect(query.window.start == start)
+        #expect(query.window.end == min(max(captured.now, start), reset))
+        #expect(captured.policy == .force)
+        try await waitForCostRefresh(in: model)
+        #expect(await recorder.captureCount == 1)
     }
 
     @Test("previous cycle API cost summary scans the full previous quota weekly range")
     func previousCycleAPICostSummaryScansFullPreviousQuotaWindow() async throws {
-        let recorder = CostRangeRecorder()
+        let recorder = CostBatchRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateApiCostSummaryRange(.previous)
         let quota = Self.quotaSnapshot(secondaryReset: Date().addingTimeInterval(10_080 * 60))
@@ -116,19 +151,25 @@ struct RunwayModelRefreshTests {
 
         model.refreshCost()
 
-        let captured = try await recorder.waitForWindow(count: 2)
+        let captured = try await recorder.waitForBatch()
         let secondary = try #require(quota.secondary)
         let reset = try #require(secondary.resetsAt)
         let minutes = try #require(secondary.windowMinutes)
         let duration = TimeInterval(minutes * 60)
         let cycleStart = reset.addingTimeInterval(-duration)
-        #expect(captured.window.start == cycleStart.addingTimeInterval(-duration))
-        #expect(captured.window.end == cycleStart)
+        let previous = try #require(captured.queries.first {
+            $0.window.start == cycleStart.addingTimeInterval(-duration)
+        })
+        #expect(captured.queries.count == 2)
+        #expect(previous.window.end == cycleStart)
+        #expect(captured.policy == .force)
+        try await waitForCostRefresh(in: model)
+        #expect(await recorder.captureCount == 1)
     }
 
     @Test("API cost summary hides bad analytics response for unavailable selected range")
     func apiCostSummaryHidesBadAnalyticsResponseForUnavailableRange() async throws {
-        let recorder = CostRangeRecorder()
+        let recorder = CostBatchRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateShowsCostSummary(true)
         settings.updateApiCostSummaryRange(.current)
@@ -141,12 +182,14 @@ struct RunwayModelRefreshTests {
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
-            scanAPIEquivalent: { window, now in
-                await recorder.record(window: window, now: now)
-                if window.start == currentStart {
-                    return Self.costSummary(window: window, calculatedAt: now)
-                }
-                return ApiEquivalentSummary.unavailable(window: window, calculatedAt: now)
+            scanAPIEquivalent: { queries, now, policy in
+                await recorder.record(queries: queries, now: now, policy: policy)
+                return Dictionary(uniqueKeysWithValues: queries.map { query in
+                    if query.window.start == currentStart {
+                        return (query.id, Self.costSummary(window: query.window, calculatedAt: now))
+                    }
+                    return (query.id, ApiEquivalentSummary.unavailable(window: query.window, calculatedAt: now))
+                })
             },
             fetchDailyWorkspaceUsage: { _, _, _, _, _ in
                 throw URLError(.badServerResponse)
@@ -164,7 +207,7 @@ struct RunwayModelRefreshTests {
         let model = RunwayModel(settings: settings, services: services)
 
         model.refreshCost()
-        _ = try await recorder.waitForWindow()
+        _ = try await recorder.waitForBatch()
         for _ in 0..<100 {
             if model.costText.contains("$1") { break }
             try await Task.sleep(for: .milliseconds(20))
@@ -172,7 +215,7 @@ struct RunwayModelRefreshTests {
 
         settings.updateApiCostSummaryRange(.today)
         model.refreshCost()
-        _ = try await recorder.waitForWindow(count: 3)
+        _ = try await recorder.waitForBatch(count: 2)
         let unavailable = settings.l10n.text(.usageAnalyticsUnavailable)
         for _ in 0..<100 {
             if model.costText == unavailable { break }
@@ -187,13 +230,80 @@ struct RunwayModelRefreshTests {
         #expect(!lineText.contains("-1011"))
     }
 
+    @Test("full refresh reserves synchronously and forwards if-changed policy")
+    func fullRefreshReservesSynchronouslyAndForwardsPolicy() async throws {
+        let batchRecorder = CostBatchRecorder()
+        let completionRecorder = RefreshEventRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        settings.updateShowsCostSummary(true)
+        let model = RunwayModel(
+            settings: settings,
+            services: Self.costRangeServices(recorder: batchRecorder))
+        model.onFullRefreshCompleted = {
+            Task { await completionRecorder.record("complete") }
+        }
+
+        model.refresh(policy: .ifChanged)
+
+        #expect(model.isRefreshingAll)
+        let captured = try await batchRecorder.waitForBatch()
+        try await completionRecorder.waitFor("complete")
+        #expect(captured.policy == .ifChanged)
+        #expect(!model.isRefreshingAll)
+    }
+
+    @Test("cancelled detail query does not start online fallback")
+    func cancelledDetailQueryDoesNotStartOnlineFallback() async throws {
+        let fallbackRecorder = OnlineFallbackRecorder()
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        let services = RunwayModelServices(
+            loadValidAuth: { _, _ in Self.auth() },
+            fetchQuota: { _ in Self.quotaSnapshot() },
+            fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
+            scanAPIEquivalent: { _, _, _ in
+                try await Task.sleep(for: .seconds(5))
+                return [:]
+            },
+            fetchDailyWorkspaceUsage: { _, _, _, window, now in
+                await fallbackRecorder.recordCall()
+                return Self.costSummary(window: window, calculatedAt: now)
+            },
+            dryRunSessions: {
+                SessionRepairReport(
+                    missingIndexIDs: [],
+                    orphanIndexIDs: [],
+                    duplicateIndexIDs: [],
+                    staleTitleIDs: [],
+                    backupPath: nil,
+                    plannedEntries: 0)
+            },
+            scanRecentSessions: { _ in SessionActivitySummary(items: []) })
+        let model = RunwayModel(settings: settings, services: services)
+        let queryTask = Task {
+            try await model.queryCost(range: .today(now: Date()))
+        }
+
+        try await Task.sleep(for: .milliseconds(20))
+        queryTask.cancel()
+        do {
+            _ = try await queryTask.value
+            Issue.record("Expected cancelled detail query to throw CancellationError")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
+        }
+
+        #expect(await fallbackRecorder.callCount == 0)
+    }
+
     @Test("quota labels follow the primary window duration")
     func quotaLabelsFollowPrimaryWindowDuration() async throws {
         let weekly = Self.quotaSnapshot(primaryMinutes: 10_080)
         let weeklySettings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         let weeklyModel = RunwayModel(
             settings: weeklySettings,
-            services: Self.costRangeServices(quota: weekly, recorder: CostRangeRecorder()))
+            services: Self.costRangeServices(quota: weekly, recorder: CostBatchRecorder()))
 
         weeklyModel.refreshQuota()
         try await waitForQuota(in: weeklyModel)
@@ -207,7 +317,7 @@ struct RunwayModelRefreshTests {
         let fiveHourSettings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         let fiveHourModel = RunwayModel(
             settings: fiveHourSettings,
-            services: Self.costRangeServices(quota: fiveHour, recorder: CostRangeRecorder()))
+            services: Self.costRangeServices(quota: fiveHour, recorder: CostBatchRecorder()))
 
         fiveHourModel.refreshQuota()
         try await waitForQuota(in: fiveHourModel)
@@ -232,6 +342,14 @@ struct RunwayModelRefreshTests {
         Issue.record("Timed out waiting for quota refresh")
     }
 
+    private func waitForCostRefresh(in model: RunwayModel) async throws {
+        for _ in 0..<100 {
+            if !model.isRefreshing(.apiCost) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for API cost refresh")
+    }
+
     nonisolated private static func quotaSnapshot(primaryMinutes: Int = 300, secondaryReset: Date? = nil) -> QuotaSnapshot {
         let now = Date(timeIntervalSince1970: 1_782_710_000)
         return QuotaSnapshot(
@@ -252,15 +370,15 @@ struct RunwayModelRefreshTests {
 
     nonisolated private static func costRangeServices(
         quota: QuotaSnapshot = quotaSnapshot(),
-        recorder: CostRangeRecorder) -> RunwayModelServices
+        recorder: CostBatchRecorder) -> RunwayModelServices
     {
         RunwayModelServices(
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
-            scanAPIEquivalent: { window, now in
-                await recorder.record(window: window, now: now)
-                return Self.costSummary(window: window, calculatedAt: now)
+            scanAPIEquivalent: { queries, now, policy in
+                await recorder.record(queries: queries, now: now, policy: policy)
+                return Self.costSummaries(for: queries, calculatedAt: now)
             },
             fetchDailyWorkspaceUsage: { _, _, _, window, now in
                 Self.costSummary(window: window, calculatedAt: now)
@@ -298,22 +416,46 @@ struct RunwayModelRefreshTests {
             pricingVersion: "test",
             calculatedAt: calculatedAt)
     }
+
+    nonisolated private static func costSummaries(
+        for queries: [ApiCostQuery],
+        calculatedAt: Date
+    ) -> [String: ApiEquivalentSummary] {
+        Dictionary(uniqueKeysWithValues: queries.map { query in
+            (query.id, costSummary(window: query.window, calculatedAt: calculatedAt))
+        })
+    }
 }
 
-private actor CostRangeRecorder {
-    private var captures: [(window: DateInterval, now: Date)] = []
+private struct CostBatchCapture: Sendable {
+    let queries: [ApiCostQuery]
+    let now: Date
+    let policy: UsageCostRefreshPolicy
+}
 
-    func record(window: DateInterval, now: Date) {
-        captures.append((window, now))
+private actor CostBatchRecorder {
+    private var captures: [CostBatchCapture] = []
+    var captureCount: Int { captures.count }
+
+    func record(queries: [ApiCostQuery], now: Date, policy: UsageCostRefreshPolicy) {
+        captures.append(CostBatchCapture(queries: queries, now: now, policy: policy))
     }
 
-    func waitForWindow(count: Int = 1) async throws -> (window: DateInterval, now: Date) {
+    func waitForBatch(count: Int = 1) async throws -> CostBatchCapture {
         for _ in 0..<100 {
             if captures.count >= count, let captured = captures.last { return captured }
             try await Task.sleep(for: .milliseconds(20))
         }
-        Issue.record("Timed out waiting for API cost range")
+        Issue.record("Timed out waiting for API cost batch")
         throw CancellationError()
+    }
+}
+
+private actor OnlineFallbackRecorder {
+    private(set) var callCount = 0
+
+    func recordCall() {
+        callCount += 1
     }
 }
 

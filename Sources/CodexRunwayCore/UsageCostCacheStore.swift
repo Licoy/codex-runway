@@ -11,7 +11,12 @@ public struct UsageCostCacheStore: Sendable {
         guard let data = try? Data(contentsOf: cacheURL) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(ApiEquivalentSummary.self, from: data)
+        guard let summary = try? decoder.decode(ApiEquivalentSummary.self, from: data),
+              summary.pricingVersion == PricingTable.version
+        else {
+            return nil
+        }
+        return summary
     }
 
     public func save(_ summary: ApiEquivalentSummary) throws {

@@ -144,11 +144,7 @@ struct UsageCostIndexRefresher {
         let pathChanged = file.url.path != existing.path || file.root.rawValue != existing.root
         let sameModificationTime = file.modificationNanoseconds == existing.modificationTimeNanoseconds
         if pathChanged, sameSize, sameModificationTime, existing.completeOffset == existing.size {
-            if try indexer.canAppend(
-                file: file,
-                existing: existing,
-                diagnostics: &diagnostics)
-            {
+            if try canAdoptCopy(selected, existing: existing, diagnostics: &diagnostics) {
                 try indexer.adopt(file: file, existing: existing, fullHash: selected.fullHash)
                 diagnostics.adoptedFiles += 1
                 return .zero

@@ -18,7 +18,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
     private var resignActiveObserver: NSObjectProtocol?
     private var lastEventNumber: Int?
     private var lastQuotaResetRefresh: Date?
-    private var nextRefresh = Date.distantFuture
+    private var refreshSchedule = RefreshSchedule()
     private var timer: Timer?
 
     func start() {
@@ -28,11 +28,14 @@ final class StatusController: NSObject, NSPopoverDelegate {
         button?.action = #selector(handleStatusItemClick(_:))
         button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         installStatusBarView()
+        model.onFullRefreshCompleted = { [weak self] in
+            self?.fullRefreshCompleted()
+        }
         settings.onChange = { [weak self] in
             self?.applyAppearance()
             self?.model.relabel()
             self?.updaterService.applyPreferences()
-            self?.scheduleNextRefresh()
+            self?.refreshIntervalChanged()
             self?.rebuildHostedViews()
             self?.updateStatusBarView()
         }
@@ -56,8 +59,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
                 self?.tick()
             }
         }
-        model.refresh()
-        scheduleNextRefresh()
+        beginFullRefresh(policy: .ifChanged)
     }
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
@@ -80,18 +82,30 @@ final class StatusController: NSObject, NSPopoverDelegate {
         updateStatusBarView()
         if let reset = model.nextDueQuotaReset(after: lastQuotaResetRefresh, now: now), !model.isRefreshing {
             lastQuotaResetRefresh = reset
-            model.refresh()
-            scheduleNextRefresh()
+            beginFullRefresh(policy: .ifChanged)
             return
         }
-        if now >= nextRefresh, !model.isRefreshing {
-            model.refresh()
-            scheduleNextRefresh()
+        if refreshSchedule.isDue(at: now), !model.isRefreshing {
+            beginFullRefresh(policy: .ifChanged)
         }
     }
 
-    private func scheduleNextRefresh() {
-        nextRefresh = Date().addingTimeInterval(TimeInterval(settings.preferences.refreshIntervalSeconds))
+    private func beginFullRefresh(policy: UsageCostRefreshPolicy) {
+        guard !model.isRefreshing else { return }
+        refreshSchedule.refreshStarted()
+        model.refresh(policy: policy)
+    }
+
+    private func fullRefreshCompleted(at completion: Date = Date()) {
+        refreshSchedule.refreshCompleted(at: completion, interval: refreshInterval)
+    }
+
+    private func refreshIntervalChanged(now: Date = Date()) {
+        refreshSchedule.intervalChanged(to: refreshInterval, now: now)
+    }
+
+    private var refreshInterval: TimeInterval {
+        TimeInterval(settings.preferences.refreshIntervalSeconds)
     }
 
     private func applyAppearance() {
@@ -225,7 +239,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
 
     private func refreshVisiblePopoverSections() {
         if settings.preferences.showsCostSummary {
-            model.refreshCost()
+            model.refreshCost(policy: .ifChanged)
         }
         if settings.preferences.showsSessionRepairSummary {
             model.refreshSessionReport()
@@ -299,8 +313,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     @objc func refreshFromMenu() {
-        model.refresh()
-        scheduleNextRefresh()
+        beginFullRefresh(policy: .force)
         showPopover()
     }
 
