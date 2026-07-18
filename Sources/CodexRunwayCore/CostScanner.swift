@@ -185,7 +185,7 @@ public struct UsageCostScanner: Sendable {
             guard let usage = record.lastTokenUsage else { return }
             let model = record.model ?? currentModel
             let totals = ApiEquivalentTotals(usage: usage, turns: 1, threads: 0)
-            let day = stream.utcDay(for: record.timestamp)
+            let day = record.utcDay
             byModel[model, default: .zero] = byModel[model, default: .zero] + totals
             byProject[currentProject, default: .zero] = byProject[currentProject, default: .zero] + totals
             byDay[day, default: .zero] = byDay[day, default: .zero] + totals
@@ -282,7 +282,7 @@ public enum PricingTable {
             return Price(inputPerMillion: 1.75, cachedInputPerMillion: 0.175, outputPerMillion: 14)
         }
         if key.contains("gpt-5.5") {
-            return gpt55EquivalentPrice
+            return equivalentPrice
         }
         if key.contains("gpt-5") {
             return Price(inputPerMillion: 1.25, cachedInputPerMillion: 0.125, outputPerMillion: 10)
@@ -301,10 +301,10 @@ public enum PricingTable {
     }
 
     static func equivalentCost(totals: ApiEquivalentTotals) -> Decimal {
-        cost(totals: totals, price: gpt55EquivalentPrice)
+        cost(totals: totals, price: equivalentPrice)
     }
 
-    private static var gpt55EquivalentPrice: Price {
+    static var equivalentPrice: Price {
         Price(inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30)
     }
 

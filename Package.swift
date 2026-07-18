@@ -17,7 +17,11 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.3"),
     ],
     targets: [
-        .target(name: "CodexRunwayCore"),
+        .target(
+            name: "CodexRunwayCore",
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+            ]),
         .executableTarget(
             name: "CodexRunway",
             dependencies: [

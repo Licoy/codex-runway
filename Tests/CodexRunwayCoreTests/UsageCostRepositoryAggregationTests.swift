@@ -1,0 +1,135 @@
+import Foundation
+import Testing
+@testable import CodexRunwayCore
+
+@Suite("Usage cost repository — aggregation")
+struct UsageCostRepositoryAggregationTests {
+    @Test("repository aggregation matches the streaming scanner field by field")
+    func repositoryMatchesStreamingScanner() async throws {
+        let fixture = try RepositoryFixture()
+        let contents = """
+        {"timestamp":"2026-06-28T23:58:00Z","type":"session_meta","payload":{"cwd":"/Users/me/dev/codex-runway"}}
+        {"timestamp":"2026-06-28T23:59:00Z","type":"turn_context","payload":{"model":"gpt-5.5"}}
+        {"timestamp":"2026-06-29T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":5,"reasoning_output_tokens":2}}}}
+        {"timestamp":"2026-06-29T02:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":200,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":3}}},"turn_context":{"model":"unknown-model"}}
+        """
+        try fixture.write(contents, basename: "rollout-differential.jsonl")
+        let request = fullWindowQuery()
+        let scanner = try UsageCostScanner(codexHome: fixture.codexHome).scanAPIEquivalent(
+            window: request.window,
+            calculatedAt: fixedNow)
+        let indexed = try #require(try await fixture.repository().summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)[request.id])
+
+        #expect(indexed.source == scanner.source)
+        #expect(indexed.confidence == scanner.confidence)
+        #expect(indexed.totals == scanner.totals)
+        #expect(indexed.dailyRows == scanner.dailyRows)
+        #expect(indexed.modelRows == scanner.modelRows)
+        #expect(indexed.projectRows == scanner.projectRows)
+        #expect(indexed.estimatedUSD == scanner.estimatedUSD)
+        #expect(indexed.warnings == scanner.warnings)
+        #expect(indexed.pricingVersion == scanner.pricingVersion)
+    }
+
+    @Test("cold batch scan includes both DateInterval endpoints once")
+    func coldBatchScanIncludesEndpoints() async throws {
+        let fixture = try RepositoryFixture()
+        let contents = [
+            tokenLine(timestamp: "2026-06-29T00:00:00Z", input: 100),
+            tokenLine(timestamp: "2026-06-29T12:00:00Z", input: 200),
+            tokenLine(timestamp: "2026-06-30T00:00:00Z", input: 300),
+        ].joined(separator: "\n") + "\n"
+        try fixture.write(contents, basename: "rollout-batch.jsonl")
+        let repository = fixture.repository()
+        let firstHalf = query(
+            id: "first",
+            start: "2026-06-29T00:00:00Z",
+            end: "2026-06-29T12:00:00Z")
+        let wholeDay = query(
+            id: "whole",
+            start: "2026-06-29T00:00:00Z",
+            end: "2026-06-30T00:00:00Z")
+
+        let summaries = try await repository.summaries(
+            for: [firstHalf, wholeDay],
+            calculatedAt: fixedNow,
+            policy: .ifChanged)
+        let diagnostics = await repository.diagnosticsSnapshot()
+
+        #expect(summaries["first"]?.totals.turns == 2)
+        #expect(summaries["first"]?.totals.totalTokens == 310)
+        #expect(summaries["whole"]?.totals.turns == 3)
+        #expect(summaries["whole"]?.totals.totalTokens == 615)
+        #expect(summaries["whole"]?.calculatedAt == fixedNow)
+        #expect(diagnostics.bytesRead == contents.utf8.count)
+        #expect(diagnostics.rebuiltFiles == 1)
+        #expect(diagnostics.indexPasses == 1)
+    }
+
+    @Test("fractional Z and offset timestamps group by UTC day")
+    func timestampsPreserveUTCGrouping() async throws {
+        let fixture = try RepositoryFixture()
+        let contents = [
+            tokenLine(timestamp: "2026-06-29T23:59:59.125Z", input: 100),
+            tokenLine(timestamp: "2026-06-29T23:30:00-02:00", input: 200),
+        ].joined(separator: "\n") + "\n"
+        try fixture.write(contents, basename: "rollout-utc-days.jsonl")
+        let request = query(
+            id: "utc",
+            start: "2026-06-29T23:00:00Z",
+            end: "2026-06-30T02:00:00Z")
+
+        let summary = try #require(try await fixture.repository().summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)[request.id])
+
+        #expect(summary.totals.turns == 2)
+        #expect(summary.dailyRows.map(\.date) == ["2026-06-29", "2026-06-30"])
+        #expect(summary.dailyRows.map(\.totals.totalTokens) == [105, 205])
+    }
+
+    @Test("duplicate query identifiers fail instead of overwriting a result")
+    func duplicateQueryIdentifiersFail() async throws {
+        let fixture = try RepositoryFixture()
+        let repository = fixture.repository()
+        let duplicate = fullWindowQuery()
+
+        do {
+            _ = try await repository.summaries(
+                for: [duplicate, duplicate],
+                calculatedAt: fixedNow,
+                policy: .ifChanged)
+            Issue.record("Expected duplicate query identifier failure")
+        } catch UsageCostRepositoryError.duplicateQueryID(let identifier) {
+            #expect(identifier == duplicate.id)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("pricing version change reprices indexed tokens without source IO")
+    func pricingVersionChangeDoesNotReadSources() async throws {
+        let fixture = try RepositoryFixture()
+        try fixture.write(
+            tokenLine(timestamp: "2026-06-29T01:00:00Z", input: 1_000_000, output: 1_000_000) + "\n",
+            basename: "rollout-pricing.jsonl")
+        let request = fullWindowQuery()
+        let cheapRepository = fixture.repository(
+            priceBook: priceBook(version: "cheap", input: 1, cached: 1, output: 1))
+        let cheap = try await cheapRepository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+
+        let expensiveRepository = fixture.repository(
+            priceBook: priceBook(version: "expensive", input: 10, cached: 10, output: 10))
+        let expensive = try await expensiveRepository.summaries(
+            for: [request], calculatedAt: fixedNow, policy: .ifChanged)
+        let diagnostics = await expensiveRepository.diagnosticsSnapshot()
+
+        #expect(cheap[request.id]?.pricingVersion == "cheap")
+        #expect(expensive[request.id]?.pricingVersion == "expensive")
+        #expect(cheap[request.id]?.estimatedUSD == 2)
+        #expect(expensive[request.id]?.estimatedUSD == 20)
+        #expect(diagnostics.bytesRead == 0)
+        #expect(diagnostics.rebuiltFiles == 0)
+    }
+}

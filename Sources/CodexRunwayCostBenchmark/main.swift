@@ -1,4 +1,4 @@
-import CodexRunwayCore
+@_spi(Benchmark) import CodexRunwayCore
 import Darwin
 import Foundation
 
@@ -7,7 +7,9 @@ private struct BenchmarkOptions {
     var relevantEvery = 10
     var irrelevantPayloadBytes = 256
     var maximumElapsedSeconds: Double?
+    var maximumWarmSeconds: Double?
     var maximumPeakRSSMiB: Double?
+    var usesRepository = false
     var keepFixture = false
 
     static func parse(_ arguments: [String]) throws -> BenchmarkOptions {
@@ -24,8 +26,12 @@ private struct BenchmarkOptions {
                 options.irrelevantPayloadBytes = try integerValue(after: argument, in: arguments, index: &index)
             case "--max-seconds":
                 options.maximumElapsedSeconds = try doubleValue(after: argument, in: arguments, index: &index)
+            case "--max-warm-seconds":
+                options.maximumWarmSeconds = try doubleValue(after: argument, in: arguments, index: &index)
             case "--max-rss-mib":
                 options.maximumPeakRSSMiB = try doubleValue(after: argument, in: arguments, index: &index)
+            case "--repository":
+                options.usesRepository = true
             case "--keep-fixture":
                 options.keepFixture = true
             case "--help", "-h":
@@ -92,18 +98,24 @@ private struct Fixture {
     var expectedTurns: Int
 }
 
+private struct Measurement {
+    var summary: ApiEquivalentSummary
+    var elapsed: Double
+    var warmElapsed: Double?
+}
+
 @main
 private enum CostScannerBenchmark {
-    static func main() {
+    static func main() async {
         do {
             let options = try BenchmarkOptions.parse(Array(CommandLine.arguments.dropFirst()))
-            try run(options: options)
+            try await run(options: options)
         } catch {
             fail("benchmark failed: \(error)")
         }
     }
 
-    private static func run(options: BenchmarkOptions) throws {
+    private static func run(options: BenchmarkOptions) async throws {
         let fixture = try makeFixture(options: options)
         defer {
             if !options.keepFixture {
@@ -114,29 +126,68 @@ private enum CostScannerBenchmark {
         let window = DateInterval(
             start: date("2026-07-18T00:00:00Z"),
             end: date("2026-07-19T00:00:00Z"))
-        let started = ProcessInfo.processInfo.systemUptime
-        let summary = try UsageCostScanner(codexHome: fixture.codexHome).scanAPIEquivalent(window: window)
-        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        let measurement = try await measure(fixture: fixture, window: window, options: options)
         let peakRSSMiB = peakResidentMemoryMiB()
 
         print("fixture_bytes=\(fileBytes)")
-        print(String(format: "elapsed_seconds=%.6f", elapsed))
+        print(String(format: "elapsed_seconds=%.6f", measurement.elapsed))
+        if let warmElapsed = measurement.warmElapsed {
+            print(String(format: "warm_elapsed_seconds=%.6f", warmElapsed))
+        }
         print(String(format: "peak_rss_mib=%.3f", peakRSSMiB))
-        print("turns=\(summary.totals.turns)")
+        print("turns=\(measurement.summary.totals.turns)")
         if options.keepFixture { print("fixture_path=\(fixture.codexHome.path)") }
 
-        guard summary.totals.turns == fixture.expectedTurns else {
+        guard measurement.summary.totals.turns == fixture.expectedTurns else {
             throw BenchmarkError.thresholdExceeded(
-                "turn count mismatch: expected \(fixture.expectedTurns), got \(summary.totals.turns)")
+                "turn count mismatch: expected \(fixture.expectedTurns), got \(measurement.summary.totals.turns)")
         }
-        if let limit = options.maximumElapsedSeconds, elapsed > limit {
+        if let limit = options.maximumElapsedSeconds, measurement.elapsed > limit {
             throw BenchmarkError.thresholdExceeded(
-                String(format: "elapsed %.6fs exceeded %.6fs", elapsed, limit))
+                String(format: "elapsed %.6fs exceeded %.6fs", measurement.elapsed, limit))
+        }
+        if let limit = options.maximumWarmSeconds,
+           let warmElapsed = measurement.warmElapsed,
+           warmElapsed > limit
+        {
+            throw BenchmarkError.thresholdExceeded(
+                String(format: "warm elapsed %.6fs exceeded %.6fs", warmElapsed, limit))
         }
         if let limit = options.maximumPeakRSSMiB, peakRSSMiB > limit {
             throw BenchmarkError.thresholdExceeded(
                 String(format: "peak RSS %.3f MiB exceeded %.3f MiB", peakRSSMiB, limit))
         }
+    }
+
+    private static func measure(
+        fixture: Fixture,
+        window: DateInterval,
+        options: BenchmarkOptions
+    ) async throws -> Measurement {
+        guard options.usesRepository else {
+            let started = ProcessInfo.processInfo.systemUptime
+            let summary = try UsageCostScanner(codexHome: fixture.codexHome)
+                .scanAPIEquivalent(window: window)
+            return Measurement(
+                summary: summary,
+                elapsed: ProcessInfo.processInfo.systemUptime - started,
+                warmElapsed: nil)
+        }
+        let repository = UsageCostRepository(
+            codexHome: fixture.codexHome,
+            databaseURL: fixture.codexHome.appendingPathComponent(".benchmark-index.sqlite3"))
+        let query = ApiCostQuery(id: "benchmark", window: window)
+        let started = ProcessInfo.processInfo.systemUptime
+        let cold = try await repository.summaries(
+            for: [query], calculatedAt: Date(), policy: .ifChanged)
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        let warmStarted = ProcessInfo.processInfo.systemUptime
+        let warm = try await repository.summaries(
+            for: [query], calculatedAt: Date(), policy: .ifChanged)
+        return Measurement(
+            summary: warm[query.id] ?? cold[query.id] ?? .unavailable(window: window),
+            elapsed: elapsed,
+            warmElapsed: ProcessInfo.processInfo.systemUptime - warmStarted)
     }
 
     private static func makeFixture(options: BenchmarkOptions) throws -> Fixture {
@@ -203,7 +254,9 @@ private func printUsage() {
       --lines N                       JSONL workload lines (default: 50000)
       --relevant-every N              one token event per N lines (default: 10)
       --irrelevant-payload-bytes N    anonymous payload bytes per unrelated line (default: 256)
+      --repository                    measure SQLite cold and warm repository queries
       --max-seconds N                 fail when scan elapsed time exceeds N
+      --max-warm-seconds N            fail when warm repository query exceeds N
       --max-rss-mib N                 fail when process peak RSS exceeds N MiB
       --keep-fixture                  preserve and print the generated fixture path
     """)

@@ -1,0 +1,162 @@
+import Foundation
+import SQLite3
+
+actor UsageCostRepositoryWorker {
+    static let currentParserVersion = 1
+
+    private let codexHome: URL
+    private let databaseURL: URL
+    private let parserVersion: Int
+    private let priceBook: UsageCostPriceBook
+    private var store: UsageCostIndexStore?
+    private var diagnostics = UsageCostRepositoryDiagnostics()
+    private var activeScans = 0
+
+    init(
+        codexHome: URL,
+        databaseURL: URL,
+        parserVersion: Int,
+        priceBook: UsageCostPriceBook)
+    {
+        self.codexHome = codexHome
+        self.databaseURL = databaseURL
+        self.parserVersion = parserVersion
+        self.priceBook = priceBook
+    }
+
+    func summaries(
+        for queries: [ApiCostQuery],
+        calculatedAt: Date,
+        policy: UsageCostRefreshPolicy
+    ) throws -> [String: ApiEquivalentSummary] {
+        try Task.checkCancellation()
+        activeScans += 1
+        diagnostics.maxConcurrentScans = max(diagnostics.maxConcurrentScans, activeScans)
+        defer { activeScans -= 1 }
+
+        do {
+            return try calculateSummaries(
+                queries: queries,
+                calculatedAt: calculatedAt,
+                policy: policy)
+        } catch {
+            guard try shouldRebuild(after: error) else { throw error }
+            let rebuilt = try rebuildStore(reason: "database-corrupt")
+            return try calculateSummaries(
+                queries: queries,
+                calculatedAt: calculatedAt,
+                policy: policy,
+                opened: rebuilt)
+        }
+    }
+
+    func diagnosticsSnapshot() -> UsageCostRepositoryDiagnostics {
+        diagnostics
+    }
+
+    private func calculateSummaries(
+        queries: [ApiCostQuery],
+        calculatedAt: Date,
+        policy: UsageCostRefreshPolicy,
+        opened suppliedStore: (store: UsageCostIndexStore, warnings: [String])? = nil
+    ) throws -> [String: ApiEquivalentSummary] {
+        try Task.checkCancellation()
+        let opened = try suppliedStore ?? openStore()
+        let refreshWarnings = try UsageCostIndexRefresher(
+            codexHome: codexHome,
+            store: opened.store,
+            parserVersion: parserVersion)
+            .refresh(policy: policy, diagnostics: &diagnostics)
+        let warnings = opened.warnings + refreshWarnings
+        var result = [String: ApiEquivalentSummary](minimumCapacity: queries.count)
+        for query in queries {
+            try Task.checkCancellation()
+            let events = try opened.store.events(in: query.window)
+            try Task.checkCancellation()
+            result[query.id] = UsageCostSummaryBuilder.make(
+                events: events,
+                window: query.window,
+                calculatedAt: calculatedAt,
+                priceBook: priceBook,
+                warnings: warnings)
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    private func openStore() throws -> (store: UsageCostIndexStore, warnings: [String]) {
+        if let store { return (store, []) }
+        try FileManager.default.createDirectory(
+            at: databaseURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        do {
+            let opened = try UsageCostIndexStore(url: databaseURL, parserVersion: parserVersion)
+            store = opened
+            return (opened, [])
+        } catch let error as UsageCostIndexStoreError {
+            switch error {
+            case .schemaVersionMismatch:
+                return try rebuildStore(reason: "schema-version")
+            case .parserVersionMismatch:
+                return try rebuildStore(reason: "parser-version")
+            case .corruptRow:
+                return try rebuildStore(reason: "database-corrupt")
+            default:
+                throw error
+            }
+        } catch let error as SQLiteError where Self.isUnambiguousCorruption(error) {
+            return try rebuildStore(reason: "database-corrupt")
+        }
+    }
+
+    private func rebuildStore(reason: String) throws -> (store: UsageCostIndexStore, warnings: [String]) {
+        store = nil
+        for url in databaseFiles() where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        let rebuilt = try UsageCostIndexStore(url: databaseURL, parserVersion: parserVersion)
+        store = rebuilt
+        diagnostics.databaseRebuilds += 1
+        return (rebuilt, ["usage-index-rebuilt:\(reason)"])
+    }
+
+    private func shouldRebuild(after error: any Error) throws -> Bool {
+        if let storeError = error as? UsageCostIndexStoreError {
+            switch storeError {
+            case .schemaVersionMismatch, .parserVersionMismatch, .corruptRow:
+                return true
+            default:
+                return false
+            }
+        }
+        if let rollback = error as? SQLiteRollbackError {
+            return try shouldRebuild(after: rollback.primary)
+                || Self.isUnambiguousCorruption(rollback.rollback)
+        }
+        guard let sqliteError = error as? SQLiteError else { return false }
+        if Self.isUnambiguousCorruption(sqliteError) { return true }
+        guard sqliteError.code & 0xFF == SQLITE_ERROR || sqliteError.code & 0xFF == SQLITE_SCHEMA,
+              let store
+        else { return false }
+        do {
+            return try !store.storageIsValid()
+        } catch let validationError as SQLiteError
+            where Self.isUnambiguousCorruption(validationError)
+        {
+            return true
+        }
+    }
+
+    private func databaseFiles() -> [URL] {
+        [
+            URL(fileURLWithPath: databaseURL.path + "-wal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm"),
+            databaseURL,
+        ]
+    }
+
+    private static func isUnambiguousCorruption(_ error: SQLiteError) -> Bool {
+        let primaryCode = error.code & 0xFF
+        return primaryCode == SQLITE_CORRUPT || primaryCode == SQLITE_NOTADB
+    }
+}
