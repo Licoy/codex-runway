@@ -225,6 +225,38 @@ public struct QuotaSnapshot: Sendable, Equatable {
             .first
     }
 
+    /// Best quota window to treat as the "billing/usage cycle" for API cost.
+    /// Prefers the longest complete window (typically weekly secondary over 5-hour primary)
+    /// so accounts that only expose weekly on `primary` still resolve.
+    public func cycleAnchorWindow() -> RateWindow? {
+        let candidates = ([secondary, primary] + additionalWindows.map(\.window))
+            .compactMap { $0 }
+            .filter { window in
+                window.resetsAt != nil && (window.windowMinutes ?? 0) > 0
+            }
+        return candidates.max { lhs, rhs in
+            (lhs.windowMinutes ?? 0) < (rhs.windowMinutes ?? 0)
+        }
+    }
+
+    /// Full cycle interval and elapsed-so-far interval for API cost queries.
+    public func cycleWindows(now: Date = Date()) -> (full: DateInterval, elapsed: DateInterval)? {
+        guard let anchor = cycleAnchorWindow(),
+              let reset = anchor.resetsAt,
+              let minutes = anchor.windowMinutes,
+              minutes > 0
+        else { return nil }
+        let start = reset.addingTimeInterval(-TimeInterval(minutes * 60))
+        guard start < reset else { return nil }
+        let full = DateInterval(start: start, end: reset)
+        let elapsedEnd = min(max(now, start), reset)
+        // Zero-length windows produce empty scans and false "unavailable" states.
+        guard elapsedEnd > start else {
+            return (full, DateInterval(start: start, end: min(start.addingTimeInterval(1), reset)))
+        }
+        return (full, DateInterval(start: start, end: elapsedEnd))
+    }
+
     public static func decode(from data: Data, now: Date = Date()) throws -> QuotaSnapshot {
         let response = try JSONDecoder().decode(QuotaResponse.self, from: data)
         return QuotaSnapshot(

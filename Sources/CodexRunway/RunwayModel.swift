@@ -25,7 +25,8 @@ struct RunwayModelServices: Sendable {
     var scanAPIEquivalent: @Sendable (
         [ApiCostQuery],
         Date,
-        UsageCostRefreshPolicy
+        UsageCostRefreshPolicy,
+        CostScanProgressReporter?
     ) async throws -> [String: ApiEquivalentSummary]
     var fetchDailyWorkspaceUsage: @Sendable (CodexAuth, String, String, DateInterval, Date) async throws -> ApiEquivalentSummary
     var dryRunSessions: @Sendable () async throws -> SessionRepairReport
@@ -60,11 +61,12 @@ struct RunwayModelServices: Sendable {
             fetchResetCredits: { auth in
                 try await quotaClient.fetchResetCredits(auth: auth)
             },
-            scanAPIEquivalent: { queries, calculatedAt, policy in
+            scanAPIEquivalent: { queries, calculatedAt, policy, progress in
                 try await costRepository.summaries(
                     for: queries,
                     calculatedAt: calculatedAt,
-                    policy: policy)
+                    policy: policy,
+                    progress: progress)
             },
             fetchDailyWorkspaceUsage: { auth, startDate, endDate, window, calculatedAt in
                 try await quotaClient.fetchDailyWorkspaceUsage(
@@ -117,6 +119,7 @@ final class RunwayModel: ObservableObject {
     @Published var costDetail: ApiEquivalentSummary?
     @Published var recentSessions: [SessionActivityItem] = []
     @Published var costScanNote: String?
+    @Published private(set) var costScanProgress: CostScanProgress = .idle
     @Published var accountDisplay: CodexAccountDisplay
     @Published var lastError: String?
     @Published private(set) var refreshingSections: Set<RunwayRefreshSection> = []
@@ -129,6 +132,7 @@ final class RunwayModel: ObservableObject {
     private let statusExporter = RunwayStatusExporter()
     private let notificationService = RunwayNotificationService()
     private let settings: RunwaySettings
+    private let costProgressReporter = CostScanProgressReporter()
     private var latestAuth: CodexAuth?
     private var latestQuota: QuotaSnapshot?
     private var latestResetCredits: ResetCreditsSnapshot?
@@ -139,6 +143,11 @@ final class RunwayModel: ObservableObject {
     private var latestSessionReport: SessionRepairReport?
     private var lastCostRefreshCompletedAt: Date?
     private var lastCostCycleIdentity: CostCycleIdentity?
+    private var detailCostCache: [String: ApiEquivalentSummary] = [:]
+    private var detailCostCacheOrder: [String] = []
+    private var detailCostInFlight: [String: Task<ApiEquivalentSummary, Error>] = [:]
+    private var costProgressConsumers = 0
+    private static let detailCostCacheLimit = 6
     private static let currentCostQueryID = "current-cycle"
     private static let selectedCostQueryID = "selected-range"
     private static let detailCostQueryID = "detail-range"
@@ -159,6 +168,11 @@ final class RunwayModel: ObservableObject {
             applyCurrentCost(cached)
             if settings.preferences.apiCostSummaryRange == .current {
                 applyDisplayedCost(cached, range: .current)
+            }
+        }
+        costProgressReporter.setHandler { [weak self] progress in
+            Task { @MainActor in
+                self?.publishCostProgress(progress)
             }
         }
     }
@@ -521,20 +535,115 @@ final class RunwayModel: ObservableObject {
     }
 
     func queryCost(range: ApiCostRange) async throws -> ApiEquivalentSummary {
+        let key = Self.detailCacheKey(for: range)
+        if let cached = detailCostCache[key] {
+            return cached
+        }
+
+        let task: Task<ApiEquivalentSummary, Error>
+        if let existing = detailCostInFlight[key] {
+            task = existing
+        } else {
+            // Unstructured so navigating away does not cancel the scan; results land in cache.
+            task = Task { @MainActor in
+                defer { self.detailCostInFlight[key] = nil }
+                let summary = try await self.performDetailCostQuery(range: range)
+                self.storeDetailCostCache(summary, key: key)
+                return summary
+            }
+            detailCostInFlight[key] = task
+        }
+
+        return try await task.value
+    }
+
+    /// Loads current-cycle cost for the detail page without treating a missing
+    /// snapshot as an immediate hard failure.
+    func queryCurrentCycleCost() async throws -> ApiEquivalentSummary {
         let now = Date()
-        let auth = try await loadValidAuth(preferCached: true)
-        return try await queryCost(range: range, auth: auth, now: now)
+        let range = try await resolveCurrentCycleCostRange(now: now)
+        // Reuse an in-memory current-cycle snapshot only when its window still matches.
+        if let costDetail,
+           costDetail.isDisplayableCost,
+           abs(costDetail.window.start.timeIntervalSince(range.window.start)) < 60,
+           costDetail.window.end <= range.window.end.addingTimeInterval(120)
+        {
+            return costDetail
+        }
+        return try await queryCost(range: range)
     }
 
     func previousCycleCostRange() -> ApiCostRange? {
         latestCurrentCycleFullWindow.map { ApiCostRange.previousCycle(from: $0) }
     }
 
-    private func queryCost(range: ApiCostRange, auth: CodexAuth, now: Date) async throws -> ApiEquivalentSummary {
+    /// Resolves the previous quota cycle window, fetching quota first when needed.
+    func resolvePreviousCycleCostRange() async throws -> ApiCostRange {
+        if let range = previousCycleCostRange() { return range }
+        let full = try await ensureCurrentCycleFullWindow()
+        return ApiCostRange.previousCycle(from: full)
+    }
+
+    private func resolveCurrentCycleCostRange(now: Date = Date()) async throws -> ApiCostRange {
+        let windows = try await ensureCurrentCycleWindows(now: now)
+        return .range(window: windows.elapsed)
+    }
+
+    private func ensureCurrentCycleFullWindow(now: Date = Date()) async throws -> DateInterval {
+        try await ensureCurrentCycleWindows(now: now).full
+    }
+
+    private func ensureCurrentCycleWindows(now: Date = Date()) async throws -> (full: DateInterval, elapsed: DateInterval) {
+        if let latestQuota, let windows = currentCycleWindows(from: latestQuota, now: now) {
+            latestCurrentCycleFullWindow = windows.full
+            return windows
+        }
+        beginCostProgress()
+        defer { endCostProgress() }
+        publishCostProgress(.preparing, force: true)
+        let auth = try await loadValidAuth(preferCached: true)
+        let quotaSnapshot = try await services.fetchQuota(auth)
+        latestQuota = quotaSnapshot
+        applyQuota(quotaSnapshot)
+        if let windows = currentCycleWindows(from: quotaSnapshot, now: now) {
+            latestCurrentCycleFullWindow = windows.full
+            return windows
+        }
+        // Soft fallback: treat the last 7 days as the current cycle so local scans
+        // still work when quota payloads omit reset/window metadata.
+        let week: TimeInterval = 7 * 24 * 3_600
+        let fallbackFull = DateInterval(start: now.addingTimeInterval(-week), end: now)
+        latestCurrentCycleFullWindow = fallbackFull
+        return (fallbackFull, fallbackFull)
+    }
+
+    private func performDetailCostQuery(range: ApiCostRange) async throws -> ApiEquivalentSummary {
+        let now = Date()
+        beginCostProgress()
+        defer { endCostProgress() }
+        publishCostProgress(.preparing, force: true)
+        let auth = try await loadValidAuth(preferCached: true)
+        return try await queryCost(range: range, auth: auth, now: now, useSharedFlight: true)
+    }
+
+    private func queryCost(
+        range: ApiCostRange,
+        auth: CodexAuth,
+        now: Date,
+        useSharedFlight: Bool
+    ) async throws -> ApiEquivalentSummary {
+        // Guard inverted/empty windows that always produce "unavailable".
+        guard range.window.end > range.window.start else {
+            throw CostRangeQueryError.usageUnavailable
+        }
         let query = ApiCostQuery(id: Self.detailCostQueryID, window: range.window)
         let local: ApiEquivalentSummary?
         do {
-            local = try await services.scanAPIEquivalent([query], now, .ifChanged)[query.id]
+            local = try await services.scanAPIEquivalent(
+                [query],
+                now,
+                .ifChanged,
+                useSharedFlight ? costProgressReporter : nil)[query.id]
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -551,6 +660,7 @@ final class RunwayModel: ObservableObject {
     ) async throws -> ApiEquivalentSummary {
         try Task.checkCancellation()
         if let local, local.isDisplayableCost { return local }
+        publishCostProgress(.fetchingOnline, force: true)
         do {
             let summary = try await services.fetchDailyWorkspaceUsage(
                 auth,
@@ -558,14 +668,55 @@ final class RunwayModel: ObservableObject {
                 range.apiEndDate,
                 range.window,
                 now)
-            guard summary.isDisplayableCost else { throw CostRangeQueryError.usageUnavailable }
             try Task.checkCancellation()
+            if summary.isDisplayableCost { return summary }
+            if let local { return local }
             return summary
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            if let local { return local }
             throw CostRangeQueryError.usageUnavailable
         }
+    }
+
+    private func beginCostProgress() {
+        costProgressConsumers += 1
+        if costProgressConsumers == 1 {
+            publishCostProgress(.preparing, force: true)
+        }
+    }
+
+    private func endCostProgress() {
+        costProgressConsumers = max(0, costProgressConsumers - 1)
+        if costProgressConsumers == 0 {
+            publishCostProgress(.finished, force: true)
+            // Idle shortly after so UI can clear loading chrome.
+            costScanProgress = .idle
+        }
+    }
+
+    private func publishCostProgress(_ progress: CostScanProgress, force: Bool = false) {
+        if force || progress.phase != costScanProgress.phase || progress.completedUnits != costScanProgress.completedUnits {
+            costScanProgress = progress
+        }
+    }
+
+    private func storeDetailCostCache(_ summary: ApiEquivalentSummary, key: String) {
+        // Do not pin failed/empty scans forever; empty ranges should re-query next visit.
+        guard summary.isDisplayableCost else { return }
+        if detailCostCache[key] == nil {
+            detailCostCacheOrder.append(key)
+        }
+        detailCostCache[key] = summary
+        while detailCostCacheOrder.count > Self.detailCostCacheLimit {
+            let evicted = detailCostCacheOrder.removeFirst()
+            detailCostCache.removeValue(forKey: evicted)
+        }
+    }
+
+    private static func detailCacheKey(for range: ApiCostRange) -> String {
+        "\(range.apiStartDate)|\(range.apiEndDate)|\(range.window.start.timeIntervalSince1970)|\(range.window.end.timeIntervalSince1970)"
     }
 
     private func loadValidAuth(preferCached: Bool) async throws -> CodexAuth {
@@ -649,6 +800,10 @@ final class RunwayModel: ObservableObject {
         let selectedRange = selectedCostRange(for: range, fullWindow: currentWindows?.full, now: now)
         let queries = costQueries(currentWindow: currentWindows?.elapsed, selectedRange: selectedRange)
 
+        beginCostProgress()
+        defer { endCostProgress() }
+        publishCostProgress(.preparing, force: true)
+
         do {
             let local = try await localCostSummaries(queries: queries, now: now, policy: policy)
             let current = try await resolveCurrentCost(
@@ -656,7 +811,12 @@ final class RunwayModel: ObservableObject {
                 local: local[Self.currentCostQueryID],
                 auth: auth,
                 now: now)
-            if let current { applyCurrentCost(current) }
+            if let current {
+                applyCurrentCost(current)
+                if let elapsed = currentWindows?.elapsed {
+                    storeDetailCostCache(current, key: Self.detailCacheKey(for: .range(window: elapsed)))
+                }
+            }
             let summary = try await resolveDisplayedCost(
                 range: range,
                 selectedRange: selectedRange,
@@ -666,6 +826,9 @@ final class RunwayModel: ObservableObject {
                 now: now)
             try Task.checkCancellation()
             applyDisplayedCost(summary, range: range, now: now)
+            if let selectedRange {
+                storeDetailCostCache(summary, key: Self.detailCacheKey(for: selectedRange))
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -685,7 +848,7 @@ final class RunwayModel: ObservableObject {
     ) async throws -> [String: ApiEquivalentSummary] {
         guard !queries.isEmpty else { return [:] }
         do {
-            return try await services.scanAPIEquivalent(queries, now, policy)
+            return try await services.scanAPIEquivalent(queries, now, policy, costProgressReporter)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -722,14 +885,18 @@ final class RunwayModel: ObservableObject {
         now: Date
     ) async throws -> ApiEquivalentSummary {
         if range == .current {
-            guard let current else { throw CostRangeQueryError.usageUnavailable }
+            guard let current, current.isDisplayableCost else {
+                throw CostRangeQueryError.usageUnavailable
+            }
             return current
         }
         if range == .previous, current == nil {
             throw CostRangeQueryError.usageUnavailable
         }
         guard let selectedRange else { throw CostRangeQueryError.usageUnavailable }
-        return try await resolveCost(local: local, range: selectedRange, auth: auth, now: now)
+        let summary = try await resolveCost(local: local, range: selectedRange, auth: auth, now: now)
+        guard summary.isDisplayableCost else { throw CostRangeQueryError.usageUnavailable }
+        return summary
     }
 
     private func selectedCostRange(
@@ -764,14 +931,7 @@ final class RunwayModel: ObservableObject {
     }
 
     private func currentCycleWindows(from quota: QuotaSnapshot, now: Date) -> (full: DateInterval, elapsed: DateInterval)? {
-        guard let secondary = quota.secondary,
-              let reset = secondary.resetsAt,
-              let minutes = secondary.windowMinutes
-        else { return nil }
-        let start = reset.addingTimeInterval(-TimeInterval(minutes * 60))
-        let full = DateInterval(start: start, end: reset)
-        let elapsedEnd = min(max(now, start), reset)
-        return (full, DateInterval(start: start, end: elapsedEnd))
+        quota.cycleWindows(now: now)
     }
 
     private func applyCurrentCost(_ summary: ApiEquivalentSummary) {

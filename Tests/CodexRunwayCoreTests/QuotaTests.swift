@@ -4,6 +4,43 @@ import Testing
 
 @Suite("Codex quota")
 struct QuotaTests {
+    @Test("cycle windows prefer the longest complete rate limit window")
+    func cycleWindowsPreferLongestCompleteWindow() throws {
+        let now = Date(timeIntervalSince1970: 1_782_710_000)
+        let weeklyReset = now.addingTimeInterval(3 * 24 * 3_600)
+        let fiveHourReset = now.addingTimeInterval(2 * 3_600)
+        let snapshot = QuotaSnapshot(
+            plan: "pro",
+            primary: RateWindow(usedPercent: 10, windowMinutes: 300, resetsAt: fiveHourReset),
+            secondary: RateWindow(usedPercent: 40, windowMinutes: 10_080, resetsAt: weeklyReset),
+            additionalWindows: [],
+            creditsBalance: nil,
+            updatedAt: now)
+
+        let windows = try #require(snapshot.cycleWindows(now: now))
+        #expect(windows.full.end == weeklyReset)
+        #expect(windows.full.duration == TimeInterval(10_080 * 60))
+        #expect(windows.elapsed.end == now)
+    }
+
+    @Test("cycle windows fall back to primary when secondary is incomplete")
+    func cycleWindowsFallBackToPrimaryWhenSecondaryIncomplete() {
+        let now = Date(timeIntervalSince1970: 1_782_710_000)
+        let weeklyReset = now.addingTimeInterval(2 * 24 * 3_600)
+        let snapshot = QuotaSnapshot(
+            plan: "pro",
+            primary: RateWindow(usedPercent: 72, windowMinutes: 10_080, resetsAt: weeklyReset),
+            secondary: RateWindow(usedPercent: 5, windowMinutes: nil, resetsAt: nil),
+            additionalWindows: [],
+            creditsBalance: nil,
+            updatedAt: now)
+
+        let windows = snapshot.cycleWindows(now: now)
+        #expect(windows?.full.end == weeklyReset)
+        #expect(windows?.full.start == weeklyReset.addingTimeInterval(-10_080 * 60))
+        #expect(windows?.elapsed.end == now)
+    }
+
     @Test("decodes quota windows and additional limits")
     func decodesQuotaWindows() throws {
         let data = """

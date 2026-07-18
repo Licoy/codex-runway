@@ -15,6 +15,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
     private var controlPanelWindow: NSWindow?
     private var eventMonitor: Any?
     private var localPopoverCloseMonitor: Any?
+    private var globalPopoverCloseMonitor: Any?
     private var resignActiveObserver: NSObjectProtocol?
     private var lastEventNumber: Int?
     private var lastQuotaResetRefresh: Date?
@@ -154,13 +155,15 @@ final class StatusController: NSObject, NSPopoverDelegate {
         if let event, lastEventNumber == event.eventNumber { return }
         lastEventNumber = event?.eventNumber
         let mouseButton = Self.mouseButton(from: event)
-        switch StatusInteraction.route(mouseButton: mouseButton, isPopoverShown: popover.isShown) {
+        let panelShown = popover.isShown || (detailsWindow?.isVisible == true)
+        switch StatusInteraction.route(mouseButton: mouseButton, isPopoverShown: panelShown) {
         case .showMenu:
             if let button { showMenu(relativeTo: button) }
         case .showPopover:
             showPopover()
         case .closePopover:
-            popover.performClose(nil)
+            closePopover()
+            closeDetailsWindow()
         }
     }
 
@@ -170,16 +173,13 @@ final class StatusController: NSObject, NSPopoverDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         if !popover.isShown {
             showDetailsWindow()
+            return
         }
         applyAppearance()
-        focusPopoverWindow()
-        Task { @MainActor [weak self] in self?.focusPopoverWindow() }
+        // Do not makeKeyAndOrderFront: that breaks NSPopover.transient auto-dismiss.
+        popover.contentViewController?.view.window?.orderFront(nil)
         startPopoverCloseMonitors()
         refreshVisiblePopoverSections()
-    }
-
-    private func focusPopoverWindow() {
-        popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -188,12 +188,23 @@ final class StatusController: NSObject, NSPopoverDelegate {
 
     private func startPopoverCloseMonitors() {
         stopPopoverCloseMonitors()
-        localPopoverCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+        let mouseDown: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+        localPopoverCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseDown) { [weak self] event in
             guard let self else { return event }
             if self.shouldClosePopover(for: event) {
                 self.closePopover()
             }
             return event
+        }
+        // Global monitor covers clicks outside this process (desktop / other apps).
+        // Accessory apps often do not resign active on empty desktop clicks.
+        globalPopoverCloseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseDown) { [weak self] event in
+            guard let self else { return }
+            Task { @MainActor in
+                if self.shouldClosePopover(for: event) {
+                    self.closePopover()
+                }
+            }
         }
     }
 
@@ -202,15 +213,36 @@ final class StatusController: NSObject, NSPopoverDelegate {
             NSEvent.removeMonitor(localPopoverCloseMonitor)
             self.localPopoverCloseMonitor = nil
         }
+        if let globalPopoverCloseMonitor {
+            NSEvent.removeMonitor(globalPopoverCloseMonitor)
+            self.globalPopoverCloseMonitor = nil
+        }
     }
 
     private func shouldClosePopover(for event: NSEvent) -> Bool {
         guard popover.isShown else { return false }
-        if eventHitsStatusButton(event) { return false }
-        if let popoverWindow = popover.contentViewController?.view.window, event.window === popoverWindow {
-            return false
+        return StatusInteraction.shouldClosePopover(
+            hitStatusButton: eventHitsStatusButton(event) || eventHitsStatusButtonScreen(event),
+            hitPopover: eventHitsPopover(event))
+    }
+
+    private func eventHitsPopover(_ event: NSEvent) -> Bool {
+        guard let popoverWindow = popover.contentViewController?.view.window else { return false }
+        if event.window === popoverWindow { return true }
+        // Global monitors may not attach event.window; fall back to screen coordinates.
+        let screenPoint = NSEvent.mouseLocation
+        return popoverWindow.frame.contains(screenPoint)
+    }
+
+    private func eventHitsStatusButtonScreen(_ event: NSEvent) -> Bool {
+        guard let button = statusItem.button, let buttonWindow = button.window else { return false }
+        if event.window === buttonWindow {
+            return eventHitsStatusButton(event)
         }
-        return true
+        let screenPoint = NSEvent.mouseLocation
+        let buttonRect = button.convert(button.bounds, to: nil)
+        let screenRect = buttonWindow.convertToScreen(buttonRect)
+        return screenRect.contains(screenPoint)
     }
 
     private func closePopover() {
@@ -234,7 +266,43 @@ final class StatusController: NSObject, NSPopoverDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
+        startDetailsWindowCloseMonitors()
         refreshVisiblePopoverSections()
+    }
+
+    private func startDetailsWindowCloseMonitors() {
+        // Reuse the same monitors: close details window when clicking outside.
+        stopPopoverCloseMonitors()
+        let mouseDown: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+        localPopoverCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseDown) { [weak self] event in
+            guard let self else { return event }
+            if self.shouldCloseDetailsWindow(for: event) {
+                self.closeDetailsWindow()
+            }
+            return event
+        }
+        globalPopoverCloseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseDown) { [weak self] event in
+            guard let self else { return }
+            Task { @MainActor in
+                if self.shouldCloseDetailsWindow(for: event) {
+                    self.closeDetailsWindow()
+                }
+            }
+        }
+    }
+
+    private func shouldCloseDetailsWindow(for event: NSEvent) -> Bool {
+        guard let detailsWindow, detailsWindow.isVisible else { return false }
+        if eventHitsStatusButton(event) || eventHitsStatusButtonScreen(event) { return false }
+        if event.window === detailsWindow { return false }
+        let screenPoint = NSEvent.mouseLocation
+        if detailsWindow.frame.contains(screenPoint) { return false }
+        return true
+    }
+
+    private func closeDetailsWindow() {
+        detailsWindow?.orderOut(nil)
+        stopPopoverCloseMonitors()
     }
 
     private func refreshVisiblePopoverSections() {
@@ -282,6 +350,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         populateMenu(menu)
         statusMenu = menu
         closePopover()
+        closeDetailsWindow()
         if let event = NSApp.currentEvent {
             NSMenu.popUpContextMenu(menu, with: event, for: button)
         } else {

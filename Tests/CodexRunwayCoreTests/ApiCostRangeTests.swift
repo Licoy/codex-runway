@@ -15,7 +15,8 @@ struct ApiCostRangeTests {
 
         #expect(range.window == window)
         #expect(range.apiStartDate == "2026-06-24")
-        #expect(range.apiEndDate == "2026-07-01")
+        // Inclusive API end day is the last fully included day for half-open windows.
+        #expect(range.apiEndDate == "2026-06-30")
     }
 
     @Test("previous cycle uses the same duration before the current cycle")
@@ -30,7 +31,7 @@ struct ApiCostRangeTests {
         #expect(range.window.start == Self.date("2026-06-17T00:00:00Z"))
         #expect(range.window.end == Self.date("2026-06-24T00:00:00Z"))
         #expect(range.apiStartDate == "2026-06-17")
-        #expect(range.apiEndDate == "2026-06-24")
+        #expect(range.apiEndDate == "2026-06-23")
     }
 
     @Test("previous cycle can use an explicit full current cycle window")
@@ -44,7 +45,7 @@ struct ApiCostRangeTests {
         #expect(range.window.start == Self.date("2026-06-17T00:00:00Z"))
         #expect(range.window.end == Self.date("2026-06-24T00:00:00Z"))
         #expect(range.apiStartDate == "2026-06-17")
-        #expect(range.apiEndDate == "2026-06-24")
+        #expect(range.apiEndDate == "2026-06-23")
     }
 
     @Test("this month starts at the local first day")

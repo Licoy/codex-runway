@@ -75,10 +75,22 @@ public struct ApiCostRange: Sendable, Equatable {
     }
 
     private static func make(window: DateInterval, calendar: Calendar) -> ApiCostRange {
-        ApiCostRange(
+        // DateInterval is half-open [start, end). When `end` lands on a day boundary,
+        // the last included instant is the previous calendar day for API inclusive dates.
+        let endInclusive = inclusiveEndDate(for: window, calendar: calendar)
+        return ApiCostRange(
             window: window,
             apiStartDate: dayString(window.start, calendar: calendar),
-            apiEndDate: dayString(window.end, calendar: calendar))
+            apiEndDate: dayString(endInclusive, calendar: calendar))
+    }
+
+    private static func inclusiveEndDate(for window: DateInterval, calendar: Calendar) -> Date {
+        guard window.duration > 0 else { return window.start }
+        let end = window.end
+        if calendar.startOfDay(for: end) == end {
+            return end.addingTimeInterval(-1)
+        }
+        return end
     }
 
     private static func dayString(_ date: Date, calendar: Calendar) -> String {

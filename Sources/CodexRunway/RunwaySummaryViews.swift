@@ -1,3 +1,4 @@
+import AppKit
 import CodexRunwayCore
 import SwiftUI
 
@@ -262,6 +263,8 @@ struct RefreshableSectionHeader: View {
     var isRefreshing: Bool
     var onRefresh: () -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
         HStack(spacing: 8) {
             Label(title, systemImage: systemImage)
@@ -276,12 +279,25 @@ struct RefreshableSectionHeader: View {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
+                .foregroundStyle(isHovered && !isRefreshing ? Color.accentColor : Color.primary)
                 .frame(width: 24, height: 24)
+                .background(
+                    isHovered && !isRefreshing ? Color.accentColor.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
             }
             .buttonStyle(.plain)
             .disabled(isRefreshing)
             .help(l10n.text(.refresh))
             .accessibilityLabel(l10n.text(.refresh))
+            .onHover { hovering in
+                isHovered = hovering
+                if hovering, !isRefreshing {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
         }
     }
 }

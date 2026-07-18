@@ -148,12 +148,22 @@ public struct ApiEquivalentSummary: Codable, Sendable, Equatable {
             calculatedAt: calculatedAt)
     }
 
-    public static func decodeAnalytics(from data: Data, window: DateInterval, calculatedAt: Date = Date()) throws -> ApiEquivalentSummary {
+    public static func decodeAnalytics(
+        from data: Data,
+        window: DateInterval,
+        calculatedAt: Date = Date(),
+        startDate: String? = nil,
+        endDate: String? = nil
+    ) throws -> ApiEquivalentSummary {
         let response = try JSONDecoder().decode(ApiAnalyticsResponse.self, from: data)
-        let start = apiDay(window.start)
-        let end = apiDay(window.end)
+        // Prefer the same inclusive day strings used for the HTTP request. Deriving days
+        // from window timestamps in UTC dropped local-calendar ranges (e.g. Asia/Shanghai).
+        let start = startDate ?? apiDay(window.start)
+        let end = endDate ?? apiDay(window.end)
+        let lower = min(start, end)
+        let upper = max(start, end)
         let items = response.data
-            .filter { $0.date >= start && $0.date <= end }
+            .filter { $0.date >= lower && $0.date <= upper }
             .sorted { $0.date < $1.date }
         let rows = try items.map { item -> ApiEquivalentDailyRow in
             let totals = try item.totals?.checkedAPITotals() ?? .zero

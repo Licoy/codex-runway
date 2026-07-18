@@ -27,7 +27,8 @@ actor UsageCostRepositoryWorker {
     func summaries(
         for queries: [ApiCostQuery],
         calculatedAt: Date,
-        policy: UsageCostRefreshPolicy
+        policy: UsageCostRefreshPolicy,
+        progress: CostScanProgressReporter? = nil
     ) throws -> [String: ApiEquivalentSummary] {
         try Task.checkCancellation()
         activeScans += 1
@@ -38,7 +39,8 @@ actor UsageCostRepositoryWorker {
             return try calculateSummaries(
                 queries: queries,
                 calculatedAt: calculatedAt,
-                policy: policy)
+                policy: policy,
+                progress: progress)
         } catch {
             guard try shouldRebuild(after: error) else { throw error }
             let rebuilt = try rebuildStore(reason: "database-corrupt")
@@ -46,7 +48,8 @@ actor UsageCostRepositoryWorker {
                 queries: queries,
                 calculatedAt: calculatedAt,
                 policy: policy,
-                opened: rebuilt)
+                opened: rebuilt,
+                progress: progress)
         }
     }
 
@@ -58,20 +61,24 @@ actor UsageCostRepositoryWorker {
         queries: [ApiCostQuery],
         calculatedAt: Date,
         policy: UsageCostRefreshPolicy,
-        opened suppliedStore: (store: UsageCostIndexStore, warnings: [String])? = nil
+        opened suppliedStore: (store: UsageCostIndexStore, warnings: [String])? = nil,
+        progress: CostScanProgressReporter? = nil
     ) throws -> [String: ApiEquivalentSummary] {
         try Task.checkCancellation()
+        progress?.report(.preparing, force: true)
         let opened = try suppliedStore ?? openStore()
         let refreshWarnings = try UsageCostIndexRefresher(
             codexHome: codexHome,
             store: opened.store,
             parserVersion: parserVersion)
-            .refresh(policy: policy, diagnostics: &diagnostics)
+            .refresh(policy: policy, diagnostics: &diagnostics, progress: progress)
         try opened.store.validateEventStorage()
         let warnings = opened.warnings + refreshWarnings
         var result = [String: ApiEquivalentSummary](minimumCapacity: queries.count)
-        for query in queries {
+        let totalQueries = queries.count
+        for (index, query) in queries.enumerated() {
             try Task.checkCancellation()
+            progress?.report(.aggregating(completed: index, total: totalQueries), force: true)
             let events = try opened.store.events(in: query.window)
             try Task.checkCancellation()
             result[query.id] = try UsageCostSummaryBuilder.make(
@@ -80,6 +87,9 @@ actor UsageCostRepositoryWorker {
                 calculatedAt: calculatedAt,
                 priceBook: priceBook,
                 warnings: warnings)
+        }
+        if totalQueries > 0 {
+            progress?.report(.aggregating(completed: totalQueries, total: totalQueries), force: true)
         }
         try Task.checkCancellation()
         return result

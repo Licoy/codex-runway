@@ -31,7 +31,12 @@ public struct QuotaClient: Sendable {
     {
         let url = try analyticsURL(startDate: startDate, endDate: endDate)
         let data = try await data(url: url, auth: auth)
-        return try ApiEquivalentSummary.decodeAnalytics(from: data, window: window, calculatedAt: calculatedAt)
+        return try ApiEquivalentSummary.decodeAnalytics(
+            from: data,
+            window: window,
+            calculatedAt: calculatedAt,
+            startDate: startDate,
+            endDate: endDate)
     }
 
     private func analyticsURL(startDate: String, endDate: String) throws -> URL {

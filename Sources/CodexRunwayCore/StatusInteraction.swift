@@ -18,4 +18,10 @@ public enum StatusInteraction {
             return isPopoverShown ? .closePopover : .showPopover
         }
     }
+
+    /// Whether an outside click should dismiss the status-item popover.
+    /// Status-button hits are left to the toggle path; popover content hits stay open.
+    public static func shouldClosePopover(hitStatusButton: Bool, hitPopover: Bool) -> Bool {
+        !hitStatusButton && !hitPopover
+    }
 }

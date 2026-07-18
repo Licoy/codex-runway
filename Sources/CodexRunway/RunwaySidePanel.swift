@@ -1,3 +1,4 @@
+import AppKit
 import CodexRunwayCore
 import Foundation
 import SwiftUI
@@ -11,6 +12,8 @@ struct SidePanelDisclosureRow: View {
     var title: String
     var action: () -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
         Button(action: action) {
             HStack {
@@ -18,14 +21,34 @@ struct SidePanelDisclosureRow: View {
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isHovered ? Color.accentColor : Color.secondary)
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
-            .background(RunwaySurface.fill, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+            .background(rowBackground, in: RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius)
+                    .strokeBorder(isHovered ? Color.accentColor.opacity(0.28) : Color.clear, lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+            .animation(.easeOut(duration: 0.12), value: isHovered)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+
+    private var rowBackground: Color {
+        // Default fill is systemGray@0.16; hover must be clearly different in both light and dark mode.
+        if isHovered {
+            return Color.accentColor.opacity(0.18)
+        }
+        return RunwaySurface.fill
     }
 }
 

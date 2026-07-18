@@ -29,7 +29,7 @@ struct RunwayModelRefreshTests {
                 await recorder.record("reset-finish")
                 return ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date())
             },
-            scanAPIEquivalent: { queries, now, _ in
+            scanAPIEquivalent: { queries, now, _, _ in
                 await recorder.record("cost-start")
                 try await Task.sleep(for: .milliseconds(160))
                 await recorder.record("cost-finish")
@@ -182,7 +182,7 @@ struct RunwayModelRefreshTests {
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
-            scanAPIEquivalent: { queries, now, policy in
+            scanAPIEquivalent: { queries, now, policy, _ in
                 await recorder.record(queries: queries, now: now, policy: policy)
                 return Dictionary(uniqueKeysWithValues: queries.map { query in
                     if query.window.start == currentStart {
@@ -252,21 +252,19 @@ struct RunwayModelRefreshTests {
         #expect(!model.isRefreshingAll)
     }
 
-    @Test("cancelled detail query does not start online fallback")
-    func cancelledDetailQueryDoesNotStartOnlineFallback() async throws {
-        let fallbackRecorder = OnlineFallbackRecorder()
+    @Test("cancelled detail waiter does not cancel shared background scan")
+    func cancelledDetailWaiterDoesNotCancelSharedBackgroundScan() async throws {
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         let services = RunwayModelServices(
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in Self.quotaSnapshot() },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
-            scanAPIEquivalent: { _, _, _ in
-                try await Task.sleep(for: .seconds(5))
-                return [:]
+            scanAPIEquivalent: { queries, now, _, _ in
+                try await Task.sleep(for: .milliseconds(80))
+                return Self.costSummaries(for: queries, calculatedAt: now)
             },
             fetchDailyWorkspaceUsage: { _, _, _, window, now in
-                await fallbackRecorder.recordCall()
-                return Self.costSummary(window: window, calculatedAt: now)
+                Self.costSummary(window: window, calculatedAt: now)
             },
             dryRunSessions: {
                 SessionRepairReport(
@@ -279,22 +277,25 @@ struct RunwayModelRefreshTests {
             },
             scanRecentSessions: { _ in SessionActivitySummary(items: []) })
         let model = RunwayModel(settings: settings, services: services)
+        let range = ApiCostRange.today(now: Date())
         let queryTask = Task {
-            try await model.queryCost(range: .today(now: Date()))
+            try await model.queryCost(range: range)
         }
 
         try await Task.sleep(for: .milliseconds(20))
         queryTask.cancel()
         do {
             _ = try await queryTask.value
-            Issue.record("Expected cancelled detail query to throw CancellationError")
+            // Unstructured scan may finish before cancel is observed; both outcomes are OK.
         } catch is CancellationError {
-            // Expected.
+            // Expected when the waiter is cancelled before the scan finishes.
         } catch {
-            Issue.record("Expected CancellationError, got \(error)")
+            Issue.record("Unexpected error: \(error)")
         }
 
-        #expect(await fallbackRecorder.callCount == 0)
+        // Background scan should still complete and populate the detail cache.
+        let summary = try await model.queryCost(range: range)
+        #expect(summary.isDisplayableCost)
     }
 
     @Test("quota labels follow the primary window duration")
@@ -376,7 +377,7 @@ struct RunwayModelRefreshTests {
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
-            scanAPIEquivalent: { queries, now, policy in
+            scanAPIEquivalent: { queries, now, policy, _ in
                 await recorder.record(queries: queries, now: now, policy: policy)
                 return Self.costSummaries(for: queries, calculatedAt: now)
             },
@@ -448,14 +449,6 @@ private actor CostBatchRecorder {
         }
         Issue.record("Timed out waiting for API cost batch")
         throw CancellationError()
-    }
-}
-
-private actor OnlineFallbackRecorder {
-    private(set) var callCount = 0
-
-    func recordCall() {
-        callCount += 1
     }
 }
 

@@ -139,7 +139,8 @@ public actor UsageCostRepository {
     public func summaries(
         for queries: [ApiCostQuery],
         calculatedAt: Date,
-        policy: UsageCostRefreshPolicy
+        policy: UsageCostRefreshPolicy,
+        progress: CostScanProgressReporter? = nil
     ) async throws -> [String: ApiEquivalentSummary] {
         try Task.checkCancellation()
         guard !queries.isEmpty else { return [:] }
@@ -157,6 +158,8 @@ public actor UsageCostRepository {
             existing.waiters.insert(waiterID)
             inFlight[key] = existing
             flight = existing
+            // Shared flights already report through the creator's progress sink.
+            progress?.report(.preparing, force: true)
         } else {
             let task = Task { [worker, beforeFlight] in
                 if let beforeFlight { await beforeFlight() }
@@ -164,7 +167,8 @@ public actor UsageCostRepository {
                 return try await worker.summaries(
                     for: canonicalQueries,
                     calculatedAt: calculatedAt,
-                    policy: policy)
+                    policy: policy,
+                    progress: progress)
             }
             flight = Flight(id: UUID(), task: task, waiters: [waiterID])
             inFlight[key] = flight

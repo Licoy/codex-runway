@@ -29,12 +29,18 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case calculatedAt
     case costShare
     case costScanFailed
+    case costScanPreparing
+    case costScanIndexing
+    case costScanAggregating
+    case costScanFetchingOnline
+    case costScanProgressFiles
     case credit
     case creditsBalance
     case creditsUsed
     case currentCycle
     case currentCycleAmount
     case customRange
+    case customRangePrompt
     case cycleStarted
     case date
     case burnRate
@@ -209,6 +215,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case unknownModels
     case unavailableCredits
     case usageAnalyticsUnavailable
+    case usageAnalyticsEmpty
     case used
     case usdPerCredit
     case version

@@ -7,7 +7,8 @@ struct UsageCostIndexRefresher {
 
     func refresh(
         policy: UsageCostRefreshPolicy,
-        diagnostics: inout UsageCostRepositoryDiagnostics
+        diagnostics: inout UsageCostRepositoryDiagnostics,
+        progress: CostScanProgressReporter? = nil
     ) throws -> [String] {
         switch policy {
         case .ifChanged, .force:
@@ -23,13 +24,27 @@ struct UsageCostIndexRefresher {
             diagnostics: &diagnostics)
         let indexer = UsageCostSourceIndexer(store: store, parserVersion: parserVersion)
         var provisionalAnomalies = UsageCostScanAnomalies.zero
-        for item in selection.sources.sorted(by: { $0.file.basename < $1.file.basename }) {
+        let sources = selection.sources.sorted(by: { $0.file.basename < $1.file.basename })
+        let total = sources.count
+        if total == 0 {
+            progress?.report(.refreshingIndex(completed: 0, total: 0), force: true)
+        }
+        for (index, item) in sources.enumerated() {
             try Task.checkCancellation()
+            progress?.report(
+                .refreshingIndex(
+                    completed: index,
+                    total: total,
+                    currentFile: item.file.basename),
+                force: index == 0 || index + 1 == total)
             provisionalAnomalies = try provisionalAnomalies.adding(update(
                 item,
                 existing: indexedByName[item.file.basename],
                 indexer: indexer,
                 diagnostics: &diagnostics))
+        }
+        if total > 0 {
+            progress?.report(.refreshingIndex(completed: total, total: total), force: true)
         }
         if selection.hashCacheChanged {
             try store.replaceSourceHashCache(with: selection.hashCacheRows)
