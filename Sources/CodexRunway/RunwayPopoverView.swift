@@ -198,38 +198,31 @@ private struct SubscriptionBadge: View {
     var l10n: L10n
 
     var body: some View {
-        Text(label)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(color.opacity(0.14), in: Capsule())
-            .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 0.7))
-            .lineLimit(1)
+        RunwayTag(label, tone: tone)
     }
 
-    private var color: Color {
+    private var tone: RunwayTagTone {
         switch tier {
         case .free:
-            return Color(nsColor: .systemGray)
+            return .gray
         case .plus:
-            return Color(nsColor: .systemBlue)
+            return .blue
         case .pro5x:
-            return Color(nsColor: .systemPurple)
+            return .purple
         case .pro20x:
-            return Color(nsColor: .systemOrange)
+            return .orange
         case .business:
-            return Color(nsColor: .systemTeal)
+            return .teal
         case .team:
-            return Color(nsColor: .systemIndigo)
+            return .indigo
         case .enterprise:
-            return Color(nsColor: .systemRed)
+            return .red
         case .edu:
-            return Color(nsColor: .systemGreen)
+            return .green
         case .api:
-            return Color(nsColor: .systemCyan)
+            return .cyan
         case .unknown:
-            return Color(nsColor: .tertiaryLabelColor)
+            return .neutral
         }
     }
 
@@ -266,27 +259,23 @@ private struct SubscriptionExpiryBadge: View {
     var now: Date = Date()
 
     var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: isExpired ? "calendar.badge.exclamationmark" : "calendar")
-                .font(.caption2.weight(.semibold))
-                .imageScale(.small)
-            Text(statusLabel)
-                .font(.caption2.weight(.semibold))
-            separator
-            Text(dateText)
-                .font(.caption2.monospacedDigit().weight(.medium))
-            if let remainingText {
+        RunwayTag(tone: tone, horizontalPadding: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: isExpired ? "calendar.badge.exclamationmark" : "calendar")
+                    .font(.caption2.weight(.semibold))
+                    .imageScale(.small)
+                Text(statusLabel)
+                    .font(.caption2.weight(.semibold))
                 separator
-                Text(remainingText)
-                    .font(.caption2.monospacedDigit())
+                Text(dateText)
+                    .font(.caption2.monospacedDigit().weight(.medium))
+                if let remainingText {
+                    separator
+                    Text(remainingText)
+                        .font(.caption2.monospacedDigit())
+                }
             }
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(color.opacity(0.12), in: Capsule())
-        .overlay(Capsule().stroke(color.opacity(0.24), lineWidth: 0.7))
-        .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
     }
@@ -296,8 +285,41 @@ private struct SubscriptionExpiryBadge: View {
         SubscriptionDateFormatter.isExpired(expiresAt, now: now)
     }
 
+    private enum Phase {
+        case active
+        case expiringSoon
+        case expired
+    }
+
+    private var phase: Phase {
+        if isExpired { return .expired }
+        let endOfDay = SubscriptionDateFormatter.endOfLocalDay(expiresAt)
+        if endOfDay.timeIntervalSince(now) <= 7 * 24 * 3_600 {
+            return .expiringSoon
+        }
+        return .active
+    }
+
+    private var tone: RunwayTagTone {
+        switch phase {
+        case .active:
+            return .green
+        case .expiringSoon:
+            return .orange
+        case .expired:
+            return .red
+        }
+    }
+
     private var statusLabel: String {
-        isExpired ? l10n.text(.subscriptionExpired) : l10n.text(.subscriptionExpires)
+        switch phase {
+        case .active:
+            return l10n.text(.subscriptionExpires)
+        case .expiringSoon:
+            return l10n.text(.subscriptionExpiringSoon)
+        case .expired:
+            return l10n.text(.subscriptionExpired)
+        }
     }
 
     private var dateText: String {
@@ -311,18 +333,6 @@ private struct SubscriptionExpiryBadge: View {
             max(0, endOfDay.timeIntervalSince(now)),
             language: l10n.language,
             includeSeconds: false)
-    }
-
-    private var color: Color {
-        if isExpired {
-            return Color(nsColor: .systemOrange)
-        }
-        // Within 7 days: warn; otherwise neutral secondary blue-gray.
-        let endOfDay = SubscriptionDateFormatter.endOfLocalDay(expiresAt)
-        if endOfDay.timeIntervalSince(now) <= 7 * 24 * 3_600 {
-            return Color(nsColor: .systemYellow)
-        }
-        return Color(nsColor: .secondaryLabelColor)
     }
 
     private var separator: some View {

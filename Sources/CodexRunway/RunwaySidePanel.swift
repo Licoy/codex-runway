@@ -269,22 +269,18 @@ private struct StatusPill: View {
     var state: ResetCreditState
 
     var body: some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .foregroundStyle(color)
-            .background(color.opacity(0.14), in: Capsule())
+        RunwayTag(text, tone: tone, font: .caption.weight(.semibold))
     }
 
-    private var color: Color {
+    private var tone: RunwayTagTone {
         switch state {
         case .available:
-            return Color(nsColor: .systemGreen)
+            return .green
         case .expiring:
-            return Color(nsColor: .systemYellow)
+            // Warning orange stays readable in light mode; pure yellow text does not.
+            return .orange
         case .unavailable:
-            return Color(nsColor: .systemRed)
+            return .red
         }
     }
 }
