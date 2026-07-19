@@ -428,79 +428,32 @@ private struct PickerRow<Control: View>: View {
 }
 
 enum ExternalURLLauncher {
+    /// Opens a URL via Launch Services. Avoid launching browser executables with Process —
+    /// that forces a multi-second handoff into an existing browser session.
     @MainActor
     static func open(_ url: URL) {
-        DiagnosticLog.write("open.request url=\(url.absoluteString) bundle=\(Bundle.main.bundlePath) id=\(Bundle.main.bundleIdentifier ?? "nil") activationPolicy=\(NSApp.activationPolicy().rawValue)")
-        if let applicationURL = NSWorkspace.shared.urlForApplication(toOpen: url),
-           let executableURL = Bundle(url: applicationURL)?.executableURL
-        {
-            DiagnosticLog.write("open.defaultBrowserExecutable path=\(executableURL.path)")
-            launchProcess(executableURL, arguments: [url.absoluteString], label: "defaultBrowserExecutable")
-            return
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(url, configuration: configuration) { _, error in
+            guard error != nil else { return }
+            DispatchQueue.main.async {
+                openWithOpenTool(url)
+            }
         }
-        DiagnosticLog.write("open.defaultBrowserExecutable nil; fallback=/usr/bin/open")
-        launchOpenTool(url)
     }
 
     @MainActor
-    private static func launchOpenTool(_ url: URL) {
-        launchProcess(URL(fileURLWithPath: "/usr/bin/open"), arguments: [url.absoluteString], label: "fallback")
-    }
-
-    @MainActor
-    private static func launchProcess(_ executableURL: URL, arguments: [String], label: String) {
+    private static func openWithOpenTool(_ url: URL) {
         let process = Process()
-        let stderr = Pipe()
-        let stdout = Pipe()
-        process.executableURL = executableURL
-        process.arguments = arguments
-        process.standardError = stderr
-        process.standardOutput = stdout
-        process.terminationHandler = { process in
-            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            DiagnosticLog.write("open.\(label).exit status=\(process.terminationStatus) stdout=\(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)) stderr=\(stderrText.trimmingCharacters(in: .whitespacesAndNewlines))")
-        }
-        DiagnosticLog.write("open.\(label).start command=\(executableURL.path) \(arguments.joined(separator: " "))")
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [url.absoluteString]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            DiagnosticLog.write("open.\(label).pid \(process.processIdentifier)")
         } catch {
-            DiagnosticLog.write("open.\(label).runError \(describe(error))")
-            if label != "fallback", let url = URL(string: arguments.first ?? "") {
-                launchOpenTool(url)
-            }
-        }
-    }
-
-    private static func describe(_ error: Error) -> String {
-        let nsError = error as NSError
-        return "domain=\(nsError.domain) code=\(nsError.code) description=\(nsError.localizedDescription) userInfo=\(nsError.userInfo)"
-    }
-}
-
-private enum DiagnosticLog {
-    private static let lock = NSLock()
-    private static let fileURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/CodexRunway/external-url.log")
-
-    static func write(_ message: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: fileURL.path) {
-                FileManager.default.createFile(atPath: fileURL.path, contents: nil)
-            }
-            let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
-            let handle = try FileHandle(forWritingTo: fileURL)
-            try handle.seekToEnd()
-            try handle.write(contentsOf: Data(line.utf8))
-            try handle.close()
-        } catch {
-            NSLog("CodexRunway external URL log failed: \(error)")
+            // Last resort: synchronous Launch Services open.
+            NSWorkspace.shared.open(url)
         }
     }
 }

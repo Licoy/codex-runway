@@ -93,3 +93,43 @@ public enum ResetCreditDateFormatter {
         return formatter
     }
 }
+
+public enum SubscriptionDateFormatter {
+    /// Stable calendar date for the account header (local timezone, no time-of-day).
+    public static func expiresOn(
+        _ date: Date,
+        language: ResolvedLanguage,
+        calendar: Calendar = .autoupdatingCurrent)
+        -> String
+    {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: language == .simplifiedChinese ? "zh_Hans_CN" : "en_US_POSIX")
+        // Fixed patterns avoid locale-style churn (e.g. "Jun 20, 2026" vs numeric).
+        formatter.dateFormat = language == .simplifiedChinese ? "yyyy/M/d" : "MMM d, yyyy"
+        return formatter.string(from: date)
+    }
+
+    /// Treat the subscription as active for the entire local calendar day of `expiresAt`.
+    public static func isExpired(
+        _ expiresAt: Date,
+        now: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent)
+        -> Bool
+    {
+        calendar.startOfDay(for: now) > calendar.startOfDay(for: expiresAt)
+    }
+
+    public static func endOfLocalDay(
+        _ date: Date,
+        calendar: Calendar = .autoupdatingCurrent)
+        -> Date
+    {
+        let start = calendar.startOfDay(for: date)
+        guard let next = calendar.date(byAdding: .day, value: 1, to: start) else {
+            return date
+        }
+        return next.addingTimeInterval(-1)
+    }
+}

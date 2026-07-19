@@ -97,6 +97,8 @@ public struct CodexIdentityClaims: Sendable, Equatable {
     public var subject: String?
     public var planType: String?
     public var accountId: String?
+    /// Billing period end from JWT `chatgpt_subscription_active_until` when present.
+    public var subscriptionActiveUntil: Date?
 
     public static func decode(_ jwt: String?) -> CodexIdentityClaims? {
         guard let jwt else { return nil }
@@ -112,7 +114,26 @@ public struct CodexIdentityClaims: Sendable, Equatable {
             username: firstNonEmpty(object["preferred_username"] as? String, object["name"] as? String),
             subject: firstNonEmpty(object["sub"] as? String),
             planType: firstNonEmpty(auth?["chatgpt_plan_type"] as? String),
-            accountId: firstNonEmpty(auth?["account_id"] as? String))
+            accountId: firstNonEmpty(
+                auth?["chatgpt_account_id"] as? String,
+                auth?["account_id"] as? String),
+            subscriptionActiveUntil: Self.parseDate(auth?["chatgpt_subscription_active_until"]))
+    }
+
+    private static func parseDate(_ value: Any?) -> Date? {
+        switch value {
+        case let text as String:
+            return RunwayDates.parse(text)
+        case let seconds as Double:
+            return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+        case let seconds as Int:
+            return seconds > 0 ? Date(timeIntervalSince1970: TimeInterval(seconds)) : nil
+        case let number as NSNumber:
+            let seconds = number.doubleValue
+            return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+        default:
+            return nil
+        }
     }
 }
 
@@ -159,10 +180,20 @@ public struct CodexAccountDisplay: Sendable, Equatable {
     public var username: String?
     public var accountId: String?
     public var subscriptionTier: CodexSubscriptionTier
+    /// Subscription billing period end from local JWT claims when available.
+    /// Paid plans with a stale past JWT date are advanced month-by-month to the next future period end.
+    public var subscriptionExpiresAt: Date?
 
-    public static func make(auth: CodexAuth?, quotaPlan: String?) -> CodexAccountDisplay {
+    public static func make(auth: CodexAuth?, quotaPlan: String?, now: Date = Date()) -> CodexAccountDisplay {
         guard let auth else {
-            return CodexAccountDisplay(isAuthenticated: false, displayName: "", email: nil, username: nil, accountId: nil, subscriptionTier: .unknown)
+            return CodexAccountDisplay(
+                isAuthenticated: false,
+                displayName: "",
+                email: nil,
+                username: nil,
+                accountId: nil,
+                subscriptionTier: .unknown,
+                subscriptionExpiresAt: nil)
         }
         let idClaims = CodexIdentityClaims.decode(auth.tokens.idToken)
         let accessClaims = CodexIdentityClaims.decode(auth.tokens.accessToken)
@@ -170,19 +201,64 @@ public struct CodexAccountDisplay: Sendable, Equatable {
         let username = firstNonEmpty(idClaims?.username, accessClaims?.username, idClaims?.subject, accessClaims?.subject)
         let accountId = firstNonEmpty(idClaims?.accountId, accessClaims?.accountId, auth.tokens.accountId)
         let plan = firstNonEmpty(quotaPlan, idClaims?.planType, accessClaims?.planType, auth.authFilePlanType, auth.planType)
+        let tier = CodexSubscriptionTier.resolve(planType: plan, fallbackPlanType: nil)
+        let rawExpiry = idClaims?.subscriptionActiveUntil ?? accessClaims?.subscriptionActiveUntil
         return CodexAccountDisplay(
             isAuthenticated: true,
             displayName: firstNonEmpty(email, username, shortenedAccountId(accountId)) ?? "",
             email: email,
             username: username,
             accountId: accountId,
-            subscriptionTier: CodexSubscriptionTier.resolve(planType: plan, fallbackPlanType: nil))
+            subscriptionTier: tier,
+            subscriptionExpiresAt: resolvedSubscriptionExpiresAt(raw: rawExpiry, tier: tier, now: now))
+    }
+
+    /// JWT `chatgpt_subscription_active_until` is often not refreshed after renewals.
+    /// When the plan is still a paid tier but the claim is already in the past, advance by
+    /// whole calendar months (UTC, matching the claim timezone) until the next future end.
+    public static func resolvedSubscriptionExpiresAt(
+        raw: Date?,
+        tier: CodexSubscriptionTier,
+        now: Date = Date())
+        -> Date?
+    {
+        guard let raw else { return nil }
+        if raw >= now { return raw }
+        guard tier.projectsBillingCycleWhenStale else { return raw }
+        return projectedNextPeriodEnd(from: raw, now: now)
+    }
+
+    private static func projectedNextPeriodEnd(from raw: Date, now: Date) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? TimeZone(identifier: "UTC")!
+        var projected = raw
+        // Hard cap avoids pathological loops if date math fails.
+        for _ in 0..<48 {
+            guard projected < now else { break }
+            guard let next = calendar.date(byAdding: .month, value: 1, to: projected), next > projected else {
+                break
+            }
+            projected = next
+        }
+        return projected
     }
 
     private static func shortenedAccountId(_ value: String?) -> String? {
         guard let value = firstNonEmpty(value) else { return nil }
         guard value.count > 9 else { return value }
         return "\(value.prefix(5))...\(value.suffix(4))"
+    }
+}
+
+extension CodexSubscriptionTier {
+    /// Paid ChatGPT-style plans renew monthly; free/API/unknown should not invent future dates.
+    fileprivate var projectsBillingCycleWhenStale: Bool {
+        switch self {
+        case .plus, .pro5x, .pro20x, .business, .team, .enterprise, .edu:
+            return true
+        case .free, .api, .unknown:
+            return false
+        }
     }
 }
 

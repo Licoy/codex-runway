@@ -168,7 +168,7 @@ final class RunwaySparkleUserDriver: NSObject, SPUUserDriver {
             message: String(format: text(.updateVersionAvailable), appcastItem.displayVersionString),
             buttons: [text(.updateLearnMore), text(.updateInstallLater)])
         if response == .alertFirstButtonReturn, let url = appcastItem.infoURL {
-            NSWorkspace.shared.open(url)
+            ExternalURLLauncher.open(url)
         }
         reply(.dismiss)
     }

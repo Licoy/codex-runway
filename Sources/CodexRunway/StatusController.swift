@@ -42,7 +42,9 @@ final class StatusController: NSObject, NSPopoverDelegate {
         }
         updaterService.applyPreferences()
         applyAppearance()
-        popover.behavior = .transient
+        // applicationDefined: dismiss is owned by status-item toggle + outside-click monitors.
+        // .transient fights makeKey (second status-item click auto-dismisses then re-opens).
+        popover.behavior = .applicationDefined
         popover.animates = false
         popover.delegate = self
         popover.contentSize = NSSize(width: 390, height: 560)
@@ -52,7 +54,10 @@ final class StatusController: NSObject, NSPopoverDelegate {
             object: nil,
             queue: .main)
         { [weak self] _ in
-            Task { @MainActor in self?.closePopover() }
+            Task { @MainActor in
+                self?.closePopover()
+                self?.closeDetailsWindow()
+            }
         }
         installEventMonitor()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -70,7 +75,12 @@ final class StatusController: NSObject, NSPopoverDelegate {
 
     private func installEventMonitor() {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, self.eventHitsStatusButton(event) else { return event }
+            guard let self else { return event }
+            // Use screen-space hit testing too: when the popover is key, event.window
+            // can be unreliable for the status item.
+            guard self.eventHitsStatusButton(event) || self.eventHitsStatusButtonScreen(event) else {
+                return event
+            }
             if event.modifierFlags.contains(.command) { return event }
             self.handleStatusEvent(event, relativeTo: self.statusItem.button)
             return nil
@@ -155,16 +165,24 @@ final class StatusController: NSObject, NSPopoverDelegate {
         if let event, lastEventNumber == event.eventNumber { return }
         lastEventNumber = event?.eventNumber
         let mouseButton = Self.mouseButton(from: event)
-        let panelShown = popover.isShown || (detailsWindow?.isVisible == true)
+        let panelShown = isMainPanelVisible
         switch StatusInteraction.route(mouseButton: mouseButton, isPopoverShown: panelShown) {
         case .showMenu:
             if let button { showMenu(relativeTo: button) }
         case .showPopover:
             showPopover()
         case .closePopover:
-            closePopover()
-            closeDetailsWindow()
+            closeMainPanel()
         }
+    }
+
+    private var isMainPanelVisible: Bool {
+        popover.isShown || (detailsWindow?.isVisible == true)
+    }
+
+    private func closeMainPanel() {
+        closePopover()
+        closeDetailsWindow()
     }
 
     private func showPopover() {
@@ -176,10 +194,24 @@ final class StatusController: NSObject, NSPopoverDelegate {
             return
         }
         applyAppearance()
-        // Do not makeKeyAndOrderFront: that breaks NSPopover.transient auto-dismiss.
-        popover.contentViewController?.view.window?.orderFront(nil)
+        // Key focus for active controls; safe with applicationDefined + custom dismiss.
+        focusPopoverWindow()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.popover.isShown else { return }
+            self.focusPopoverWindow()
+        }
         startPopoverCloseMonitors()
         refreshVisiblePopoverSections()
+    }
+
+    private func focusPopoverWindow() {
+        guard popover.isShown, let window = popover.contentViewController?.view.window else { return }
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        // Prefer makeKey over makeKeyAndOrderFront once shown: keeps popover ordering stable.
+        window.makeKey()
+        window.orderFront(nil)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -191,6 +223,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         let mouseDown: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
         localPopoverCloseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseDown) { [weak self] event in
             guard let self else { return event }
+            // Escape-like: status-button hits are handled by the toggle path (eventMonitor).
             if self.shouldClosePopover(for: event) {
                 self.closePopover()
             }
@@ -252,6 +285,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     private func showDetailsWindow() {
+        let isNew = detailsWindow == nil
         let window = detailsWindow ?? NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 390, height: 560),
             styleMask: [.titled, .closable],
@@ -264,8 +298,18 @@ final class StatusController: NSObject, NSPopoverDelegate {
         detailsWindow = window
         applyAppearance()
         NSApp.activate(ignoringOtherApps: true)
-        window.center()
+        if isNew || !window.isVisible {
+            window.center()
+        }
         window.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.detailsWindow, window.isVisible else { return }
+            if !NSApp.isActive {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            window.makeKey()
+            window.orderFront(nil)
+        }
         startDetailsWindowCloseMonitors()
         refreshVisiblePopoverSections()
     }
@@ -349,8 +393,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         let menu = NSMenu()
         populateMenu(menu)
         statusMenu = menu
-        closePopover()
-        closeDetailsWindow()
+        closeMainPanel()
         if let event = NSApp.currentEvent {
             NSMenu.popUpContextMenu(menu, with: event, for: button)
         } else {

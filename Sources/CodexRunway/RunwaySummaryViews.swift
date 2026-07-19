@@ -28,9 +28,10 @@ struct QuotaMetersView: View {
     }
 
     private func quotaRow(_ meter: QuotaMeter) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             Text(meter.title).font(.headline)
-            RunwayProgressBar(meter: meter).frame(height: 12)
+            RunwayProgressBar(meter: meter)
+                .frame(height: RunwayProgressBar.barHeight)
             HStack(alignment: .firstTextBaseline) {
                 Text("\(meter.remainingPercent)% \(l10n.text(.left))")
                 Spacer()
@@ -67,25 +68,56 @@ struct QuotaMetersView: View {
 }
 
 struct RunwayProgressBar: View {
+    static let barHeight: CGFloat = 6
+
     var meter: QuotaMeter
 
     var body: some View {
         GeometryReader { proxy in
+            let fillWidth = max(4, proxy.size.width * CGFloat(meter.remainingPercent) / 100)
             ZStack(alignment: .leading) {
                 Capsule().fill(RunwaySurface.subtleFill)
                 Capsule()
                     .fill(color)
-                    .frame(width: max(6, proxy.size.width * CGFloat(meter.remainingPercent) / 100))
+                    .frame(width: fillWidth)
+                    .overlay(alignment: .leading) {
+                        flowingHighlight(fillWidth: fillWidth, height: proxy.size.height)
+                    }
+                    .clipShape(Capsule())
                 ForEach(meter.markerPercents, id: \.self) { marker in
-                    let x = min(max(1, proxy.size.width * CGFloat(marker) / 100), proxy.size.width - 2)
+                    let x = min(max(1, proxy.size.width * CGFloat(marker) / 100), proxy.size.width - 1)
                     Capsule()
                         .fill(Color(nsColor: .separatorColor).opacity(0.28))
-                        .frame(width: 1.5, height: 6)
+                        .frame(width: 1, height: max(3, proxy.size.height - 2))
                         .offset(x: x)
                 }
             }
         }
         .accessibilityLabel("\(meter.title) \(meter.remainingPercent)%")
+    }
+
+    /// Soft highlight that drifts across the filled segment.
+    private func flowingHighlight(fillWidth: CGFloat, height: CGFloat) -> some View {
+        let bandWidth = max(18, fillWidth * 0.38)
+        return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let cycle = 1.85
+            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
+            // Travel fully across the fill, including overshoot so the band exits cleanly.
+            let travel = fillWidth + bandWidth
+            let x = CGFloat(t) * travel - bandWidth
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0),
+                    Color.white.opacity(0.42),
+                    Color.white.opacity(0),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing)
+                .frame(width: bandWidth, height: height)
+                .offset(x: x)
+                .blendMode(.plusLighter)
+        }
+        .allowsHitTesting(false)
     }
 
     var color: Color {

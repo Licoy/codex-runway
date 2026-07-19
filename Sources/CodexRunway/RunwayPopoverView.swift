@@ -82,7 +82,7 @@ struct RunwayPopoverView: View {
 
     private var header: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Codex Runway").font(.title3.bold())
                 HStack(spacing: 8) {
                     SubscriptionBadge(tier: model.accountDisplay.subscriptionTier, l10n: l10n)
@@ -92,8 +92,11 @@ struct RunwayPopoverView: View {
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                if let expiresAt = model.accountDisplay.subscriptionExpiresAt {
+                    SubscriptionExpiryBadge(expiresAt: expiresAt, l10n: l10n)
+                }
             }
-            Spacer()
+            Spacer(minLength: 8)
             HStack(spacing: 10) {
                 HeaderActionButton(title: l10n.text(.checkForUpdates), action: checkForUpdates) {
                     BootstrapIconImage(.cloudArrowDown)
@@ -253,6 +256,83 @@ private struct SubscriptionBadge: View {
         case .unknown:
             return l10n.text(.planUnknown)
         }
+    }
+}
+
+/// Compact capsule under the account row: icon · label · date · optional remaining.
+private struct SubscriptionExpiryBadge: View {
+    var expiresAt: Date
+    var l10n: L10n
+    var now: Date = Date()
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: isExpired ? "calendar.badge.exclamationmark" : "calendar")
+                .font(.caption2.weight(.semibold))
+                .imageScale(.small)
+            Text(statusLabel)
+                .font(.caption2.weight(.semibold))
+            separator
+            Text(dateText)
+                .font(.caption2.monospacedDigit().weight(.medium))
+            if let remainingText {
+                separator
+                Text(remainingText)
+                    .font(.caption2.monospacedDigit())
+            }
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.24), lineWidth: 0.7))
+        .lineLimit(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    /// Still active through the expiry calendar day in the local timezone.
+    private var isExpired: Bool {
+        SubscriptionDateFormatter.isExpired(expiresAt, now: now)
+    }
+
+    private var statusLabel: String {
+        isExpired ? l10n.text(.subscriptionExpired) : l10n.text(.subscriptionExpires)
+    }
+
+    private var dateText: String {
+        SubscriptionDateFormatter.expiresOn(expiresAt, language: l10n.language)
+    }
+
+    private var remainingText: String? {
+        guard !isExpired else { return nil }
+        let endOfDay = SubscriptionDateFormatter.endOfLocalDay(expiresAt)
+        return DurationFormatter.localized(
+            max(0, endOfDay.timeIntervalSince(now)),
+            language: l10n.language,
+            includeSeconds: false)
+    }
+
+    private var color: Color {
+        if isExpired {
+            return Color(nsColor: .systemOrange)
+        }
+        // Within 7 days: warn; otherwise neutral secondary blue-gray.
+        let endOfDay = SubscriptionDateFormatter.endOfLocalDay(expiresAt)
+        if endOfDay.timeIntervalSince(now) <= 7 * 24 * 3_600 {
+            return Color(nsColor: .systemYellow)
+        }
+        return Color(nsColor: .secondaryLabelColor)
+    }
+
+    private var separator: some View {
+        Text("·")
+            .font(.caption2.weight(.semibold))
+            .opacity(0.55)
+    }
+
+    private var accessibilityText: String {
+        [statusLabel, dateText, remainingText].compactMap(\.self).joined(separator: " ")
     }
 }
 

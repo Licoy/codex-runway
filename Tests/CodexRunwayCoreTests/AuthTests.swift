@@ -101,7 +101,8 @@ struct AuthTests {
             ],
             "https://api.openai.com/auth": [
                 "chatgpt_plan_type": "prolite",
-                "account_id": "acct_123",
+                "chatgpt_account_id": "acct_123",
+                "chatgpt_subscription_active_until": "2026-06-20T11:08:02+00:00",
             ],
         ])
 
@@ -112,6 +113,7 @@ struct AuthTests {
         #expect(claims.subject == "user-sub")
         #expect(claims.planType == "prolite")
         #expect(claims.accountId == "acct_123")
+        #expect(claims.subscriptionActiveUntil == RunwayDates.parse("2026-06-20T11:08:02+00:00"))
         #expect(CodexIdentityClaims.decode("not-a-jwt") == nil)
     }
 
@@ -152,6 +154,7 @@ struct AuthTests {
             "https://api.openai.com/auth": [
                 "chatgpt_plan_type": "plus",
                 "account_id": "acct_123456789",
+                "chatgpt_subscription_active_until": "2026-08-01T00:00:00Z",
             ],
         ])
         let accessToken = Self.jwt(payload: ["preferred_username": "access-user"])
@@ -166,6 +169,34 @@ struct AuthTests {
         #expect(display.email == "person@example.com")
         #expect(display.accountId == "acct_123456789")
         #expect(display.subscriptionTier == .pro20x)
+        #expect(display.subscriptionExpiresAt == RunwayDates.parse("2026-08-01T00:00:00Z"))
+    }
+
+    @Test("projects stale JWT subscription end forward for paid plans")
+    func projectsStalePaidSubscriptionEnd() {
+        // Real-world case: id_token still says June 20 after renewal; today is July 19.
+        let now = RunwayDates.parse("2026-07-19T14:00:00Z")!
+        let raw = RunwayDates.parse("2026-06-20T11:08:02+00:00")!
+        let projected = CodexAccountDisplay.resolvedSubscriptionExpiresAt(
+            raw: raw,
+            tier: .pro5x,
+            now: now)
+        let expected = RunwayDates.parse("2026-07-20T11:08:02+00:00")
+        #expect(projected == expected)
+        #expect(!SubscriptionDateFormatter.isExpired(projected!, now: now))
+
+        // Free / unknown keep the past claim as truly expired.
+        #expect(
+            CodexAccountDisplay.resolvedSubscriptionExpiresAt(raw: raw, tier: .free, now: now) == raw)
+        #expect(SubscriptionDateFormatter.isExpired(raw, now: now))
+    }
+
+    @Test("future JWT subscription end is left unchanged")
+    func keepsFutureSubscriptionEnd() {
+        let now = RunwayDates.parse("2026-07-19T14:00:00Z")!
+        let raw = RunwayDates.parse("2026-08-20T11:08:02+00:00")!
+        #expect(
+            CodexAccountDisplay.resolvedSubscriptionExpiresAt(raw: raw, tier: .pro5x, now: now) == raw)
     }
 
     @Test("account display falls back to username and account id")
