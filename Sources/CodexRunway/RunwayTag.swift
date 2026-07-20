@@ -26,15 +26,15 @@ struct RunwayTagColors: Equatable {
         let light = colorScheme == .light
         switch tone {
         case .neutral:
-            // Avoid secondaryLabel as fill source — near-invisible in light mode.
+            // Soft chip: dark text on gray fill (not tint-on-tint).
             return RunwayTagColors(
-                foreground: Color(nsColor: .secondaryLabelColor),
+                foreground: Color(nsColor: light ? .labelColor : .secondaryLabelColor),
                 background: light
-                    ? Color.black.opacity(0.06)
-                    : Color.white.opacity(0.12),
-                stroke: Color(nsColor: .separatorColor).opacity(light ? 0.85 : 0.55))
+                    ? Color.black.opacity(0.08)
+                    : Color.white.opacity(0.14),
+                stroke: Color(nsColor: .separatorColor).opacity(light ? 0.95 : 0.65))
         case .yellow:
-            // Pure systemYellow text washes out on light backgrounds; use orange for labels.
+            // Pure systemYellow text washes out; orange stays readable for warnings.
             let tint = Color(nsColor: light ? .systemOrange : .systemYellow)
             return tinted(tint, light: light)
         default:
@@ -43,11 +43,17 @@ struct RunwayTagColors: Equatable {
     }
 
     private static func tinted(_ tint: Color, light: Bool) -> RunwayTagColors {
-        RunwayTagColors(
+        if light {
+            // Light: solid-ish fill + white label — avoids same-hue text/background muddiness.
+            return RunwayTagColors(
+                foreground: .white,
+                background: tint.opacity(0.92),
+                stroke: tint.opacity(0.55))
+        }
+        return RunwayTagColors(
             foreground: tint,
-            // Slightly stronger fill in dark mode so chips don't disappear on dark panels.
-            background: tint.opacity(light ? 0.12 : 0.22),
-            stroke: tint.opacity(light ? 0.34 : 0.42))
+            background: tint.opacity(0.24),
+            stroke: tint.opacity(0.45))
     }
 
     private static func baseTint(_ tone: RunwayTagTone) -> Color {
@@ -96,7 +102,7 @@ struct RunwayTag<Content: View>: View {
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
             .background(colors.background, in: Capsule())
-            .overlay(Capsule().strokeBorder(colors.stroke, lineWidth: 0.7))
+            .overlay(Capsule().strokeBorder(colors.stroke, lineWidth: colorScheme == .light ? 1.0 : 0.8))
             .lineLimit(1)
     }
 }
