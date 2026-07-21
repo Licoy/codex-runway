@@ -90,6 +90,12 @@ The self-check prints local diagnostics with tokens redacted.
 - Session repair only touches `~/.codex/session_index.jsonl`, creates a backup before writing, and never deletes session files.
 - Update checks request only version information. Codex account and session data are not uploaded.
 
+## Data sources
+
+- **Reset today?**: Status comes from the public third-party site [hascodexratelimitreset.today](https://hascodexratelimitreset.today/) and its `api/status` endpoint. Codex Runway only fetches the published result and never attaches Codex accounts or tokens. Treat it as advisory — this app does not control or guarantee that source’s accuracy or availability.
+- **Quota / reset credits / some online usage**: When you are signed in, requests use your local credentials against the official ChatGPT / Codex backend APIs.
+- **API-equivalent cost and recent sessions**: Computed by default from local `~/.codex` session logs and the local index.
+
 ## Development and Contribution
 
 ```bash
@@ -99,12 +105,6 @@ swift build -c release
 ```
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for contribution notes.
-
-## Data sources
-
-- **Reset today?**: Status comes from the public third-party site [hascodexratelimitreset.today](https://hascodexratelimitreset.today/) and its `api/status` endpoint. Codex Runway only fetches the published result and never attaches Codex accounts or tokens. Treat it as advisory — this app does not control or guarantee that source’s accuracy or availability.
-- **Quota / reset credits / some online usage**: When you are signed in, requests use your local credentials against the official ChatGPT / Codex backend APIs.
-- **API-equivalent cost and recent sessions**: Computed by default from local `~/.codex` session logs and the local index.
 
 ## License
 

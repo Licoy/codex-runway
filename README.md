@@ -90,6 +90,12 @@ swift run CodexRunway --self-check
 - 会话修复只处理 `~/.codex/session_index.jsonl`，写入前会创建备份，不删除会话文件。
 - 更新检测只访问版本信息，不上传 Codex 账号或会话数据。
 
+## 数据来源
+
+- **今日是否重置**：状态来自第三方公开站点 [hascodexratelimitreset.today](https://hascodexratelimitreset.today/) 及其 `api/status` 接口。Codex Runway 仅拉取公开结果，不附带任何 Codex 账号或 token；结果仅供参考，应用不控制也不保证该数据源的准确性与可用性。
+- **配额 / reset credits / 部分在线用量**：在你已登录的前提下，通过本机凭据访问官方 ChatGPT / Codex 后端接口。
+- **API 等价成本与最近会话**：默认基于本机 `~/.codex` 会话日志与本地索引计算。
+
 ## 开发与贡献
 
 ```bash
@@ -103,12 +109,6 @@ swift build -c release
 ## 社区支持
 
 - [LinuxDO](https://linux.do/)
-
-## 数据来源
-
-- **今日是否重置**：状态来自第三方公开站点 [hascodexratelimitreset.today](https://hascodexratelimitreset.today/) 及其 `api/status` 接口。Codex Runway 仅拉取公开结果，不附带任何 Codex 账号或 token；结果仅供参考，应用不控制也不保证该数据源的准确性与可用性。
-- **配额 / reset credits / 部分在线用量**：在你已登录的前提下，通过本机凭据访问官方 ChatGPT / Codex 后端接口。
-- **API 等价成本与最近会话**：默认基于本机 `~/.codex` 会话日志与本地索引计算。
 
 ## 许可证
 
