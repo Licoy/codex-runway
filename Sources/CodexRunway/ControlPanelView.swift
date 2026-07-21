@@ -161,6 +161,26 @@ struct ControlPanelView: View {
                     .pickerStyle(.menu)
                 }
                 PreferenceToggleRow(
+                    title: l10n.text(.showRateLimitResetToday),
+                    subtitle: l10n.text(.rateLimitResetTodayDescription),
+                    binding: rateLimitResetTodayBinding)
+                if settings.preferences.showsRateLimitResetToday {
+                    PickerRow(
+                        title: l10n.text(.rateLimitResetTodayRefreshInterval),
+                        subtitle: l10n.text(.rateLimitResetTodayDescription))
+                    {
+                        Picker(
+                            l10n.text(.rateLimitResetTodayRefreshInterval),
+                            selection: rateLimitResetTodayRefreshIntervalBinding)
+                        {
+                            ForEach(RunwayPreferences.rateLimitResetTodayRefreshIntervalOptions, id: \.self) { seconds in
+                                Text(rateLimitResetTodayIntervalLabel(seconds)).tag(seconds)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+                PreferenceToggleRow(
                     title: l10n.text(.showRecentSessions),
                     subtitle: l10n.text(.recentSessionsDescription),
                     binding: recentSessionsBinding)
@@ -273,6 +293,31 @@ struct ControlPanelView: View {
 
     private var costSummaryBinding: Binding<Bool> {
         Binding(get: { settings.preferences.showsCostSummary }, set: { settings.updateShowsCostSummary($0) })
+    }
+
+    private var rateLimitResetTodayBinding: Binding<Bool> {
+        Binding(
+            get: { settings.preferences.showsRateLimitResetToday },
+            set: { enabled in
+                settings.updateShowsRateLimitResetToday(enabled)
+                if enabled {
+                    model.refreshRateLimitResetToday(force: true)
+                }
+            })
+    }
+
+    private var rateLimitResetTodayRefreshIntervalBinding: Binding<Int> {
+        Binding(
+            get: { settings.preferences.rateLimitResetTodayRefreshIntervalSeconds },
+            set: { settings.updateRateLimitResetTodayRefreshInterval($0) })
+    }
+
+    private func rateLimitResetTodayIntervalLabel(_ seconds: Int) -> String {
+        if seconds < 3_600 {
+            return "\(seconds / 60) \(l10n.text(.minutes))"
+        }
+        let hours = seconds / 3_600
+        return "\(hours) \(l10n.text(.hours))"
     }
 
     private var apiCostSummaryRangeBinding: Binding<ApiCostSummaryRange> {

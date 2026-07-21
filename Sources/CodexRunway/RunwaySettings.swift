@@ -73,6 +73,17 @@ final class RunwaySettings: ObservableObject {
         update { $0.showsSessionRepairSummary = isShown }
     }
 
+    func updateShowsRateLimitResetToday(_ isShown: Bool) {
+        update { $0.showsRateLimitResetToday = isShown }
+    }
+
+    func updateRateLimitResetTodayRefreshInterval(_ seconds: Int) {
+        update {
+            $0.rateLimitResetTodayRefreshIntervalSeconds =
+                RunwayPreferences.clampRateLimitResetTodayRefreshInterval(seconds)
+        }
+    }
+
     func updateAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
         update { $0.automaticallyChecksForUpdates = isEnabled }
     }

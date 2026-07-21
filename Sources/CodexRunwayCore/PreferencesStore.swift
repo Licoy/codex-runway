@@ -60,10 +60,15 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
     public var showsCostSummary: Bool
     public var showsRecentSessions: Bool
     public var showsSessionRepairSummary: Bool
+    public var showsRateLimitResetToday: Bool
+    public var rateLimitResetTodayRefreshIntervalSeconds: Int
     public var automaticallyChecksForUpdates: Bool
     public var quotaAlertsEnabled: Bool
     public var resetCreditAlertsEnabled: Bool
     public var exportsStatusJSON: Bool
+
+    public static let rateLimitResetTodayRefreshIntervalOptions: [Int] = [900, 1_800, 3_600, 7_200, 21_600]
+    public static let defaultRateLimitResetTodayRefreshIntervalSeconds = 3_600
 
     public init(
         language: LanguagePreference = .system,
@@ -77,6 +82,8 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         showsCostSummary: Bool = true,
         showsRecentSessions: Bool = false,
         showsSessionRepairSummary: Bool = true,
+        showsRateLimitResetToday: Bool = true,
+        rateLimitResetTodayRefreshIntervalSeconds: Int = RunwayPreferences.defaultRateLimitResetTodayRefreshIntervalSeconds,
         automaticallyChecksForUpdates: Bool = true,
         quotaAlertsEnabled: Bool = false,
         resetCreditAlertsEnabled: Bool = false,
@@ -93,10 +100,17 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         self.showsCostSummary = showsCostSummary
         self.showsRecentSessions = showsRecentSessions
         self.showsSessionRepairSummary = showsSessionRepairSummary
+        self.showsRateLimitResetToday = showsRateLimitResetToday
+        self.rateLimitResetTodayRefreshIntervalSeconds = Self.clampRateLimitResetTodayRefreshInterval(
+            rateLimitResetTodayRefreshIntervalSeconds)
         self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
         self.quotaAlertsEnabled = quotaAlertsEnabled
         self.resetCreditAlertsEnabled = resetCreditAlertsEnabled
         self.exportsStatusJSON = exportsStatusJSON
+    }
+
+    public static func clampRateLimitResetTodayRefreshInterval(_ seconds: Int) -> Int {
+        max(900, min(21_600, seconds))
     }
 
     enum CodingKeys: String, CodingKey {
@@ -111,6 +125,8 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         case showsCostSummary
         case showsRecentSessions
         case showsSessionRepairSummary
+        case showsRateLimitResetToday
+        case rateLimitResetTodayRefreshIntervalSeconds
         case automaticallyChecksForUpdates
         case quotaAlertsEnabled
         case resetCreditAlertsEnabled
@@ -130,6 +146,10 @@ public struct RunwayPreferences: Codable, Sendable, Equatable {
         showsCostSummary = try container.decodeIfPresent(Bool.self, forKey: .showsCostSummary) ?? true
         showsRecentSessions = try container.decodeIfPresent(Bool.self, forKey: .showsRecentSessions) ?? false
         showsSessionRepairSummary = try container.decodeIfPresent(Bool.self, forKey: .showsSessionRepairSummary) ?? true
+        showsRateLimitResetToday = try container.decodeIfPresent(Bool.self, forKey: .showsRateLimitResetToday) ?? true
+        rateLimitResetTodayRefreshIntervalSeconds = Self.clampRateLimitResetTodayRefreshInterval(
+            try container.decodeIfPresent(Int.self, forKey: .rateLimitResetTodayRefreshIntervalSeconds)
+                ?? Self.defaultRateLimitResetTodayRefreshIntervalSeconds)
         automaticallyChecksForUpdates = try container.decodeIfPresent(Bool.self, forKey: .automaticallyChecksForUpdates) ?? true
         quotaAlertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .quotaAlertsEnabled) ?? false
         resetCreditAlertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .resetCreditAlertsEnabled) ?? false

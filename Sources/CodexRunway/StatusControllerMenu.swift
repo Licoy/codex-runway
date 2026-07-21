@@ -6,6 +6,13 @@ extension StatusController {
         menu.removeAllItems()
         menu.addItem(disabledMenuItem("Codex Runway · \(model.statusText)"))
         addSection(l10n.text(.quota), text: model.quotaText, lines: model.quotaLines, to: menu)
+        if settings.preferences.showsRateLimitResetToday {
+            addSection(
+                l10n.text(.rateLimitResetToday),
+                text: model.rateLimitResetTodayText,
+                lines: model.rateLimitResetTodayLines,
+                to: menu)
+        }
         addSection(l10n.text(.resetCredits), text: model.resetCreditsText, lines: model.resetCreditLines, to: menu)
         addSection(l10n.text(.apiCost), text: model.costText, lines: model.costLines, to: menu)
         addSection(l10n.text(.sessionRepair), text: model.sessionText, lines: model.sessionLines, to: menu)

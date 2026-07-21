@@ -214,6 +214,223 @@ struct RecentSessionsView: View {
     }
 }
 
+/// Compact reset status: large Yes/No, tight rows for tweet + timestamps.
+struct RateLimitResetTodayView: View {
+    var snapshot: RateLimitResetTodaySnapshot?
+    var l10n: L10n
+    var isRefreshing: Bool
+    var onRefresh: () -> Void
+    var onOpenSource: () -> Void
+    var onOpenTweet: ((URL) -> Void)?
+
+    @State private var showsSourceInfo = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                RefreshableSectionHeader(
+                    title: l10n.text(.rateLimitResetToday),
+                    systemImage: "sparkles",
+                    l10n: l10n,
+                    isRefreshing: isRefreshing,
+                    onRefresh: onRefresh,
+                    trailingCaption: lastFetchedCaption(now: context.date),
+                    onInfo: { showsSourceInfo = true },
+                    infoHelp: l10n.text(.rateLimitResetTodaySourceTitle))
+            }
+
+            VStack(spacing: 8) {
+                hero
+                if hasTweetRow {
+                    tweetRow
+                }
+                if let footerText = footerMetaText {
+                    Text(footerText)
+                        .font(.caption2)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background {
+                heroBackground
+                    .clipShape(RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: RunwaySurface.cornerRadius)
+                    .strokeBorder(heroColor.opacity(0.16), lineWidth: 1)
+            }
+        }
+        .sheet(isPresented: $showsSourceInfo) {
+            RateLimitResetTodaySourceSheet(
+                l10n: l10n,
+                onOpenSource: {
+                    showsSourceInfo = false
+                    onOpenSource()
+                },
+                onDismiss: { showsSourceInfo = false })
+        }
+    }
+
+    /// Large answer on the left, hint on the right — one row instead of a tall centered stack.
+    private var hero: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(heroTitle)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundStyle(heroColor)
+                .minimumScaleFactor(0.75)
+                .lineLimit(1)
+                .layoutPriority(1)
+
+            Text(heroSubtitle)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .multilineTextAlignment(.leading)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var tweetRow: some View {
+        Group {
+            if let url = snapshot?.tweetURL, let onOpenTweet {
+                Button {
+                    onOpenTweet(url)
+                } label: {
+                    tweetRowContent
+                }
+                .buttonStyle(.plain)
+                .help(l10n.text(.rateLimitResetTodayOpenTweet))
+            } else {
+                tweetRowContent
+            }
+        }
+    }
+
+    private var tweetRowContent: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(heroColor.opacity(0.9))
+
+            Text(tweetLineText)
+                .font(.caption)
+                .foregroundStyle(Color(nsColor: .labelColor).opacity(0.88))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            if snapshot?.tweetURL != nil {
+                Image(systemName: "arrow.up.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(RunwaySurface.fill.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func lastFetchedCaption(now: Date) -> String? {
+        guard let snapshot else { return nil }
+        let relative = DurationFormatter.relativePast(
+            since: snapshot.fetchedAt,
+            now: now,
+            language: l10n.language)
+        return "\(l10n.text(.rateLimitResetTodayLastFetched)) \(relative)"
+    }
+
+    /// Site-side meta only (last local refresh lives in the section header).
+    private var footerMetaText: String? {
+        guard let snapshot else {
+            return l10n.text(isRefreshing ? .calculating : .notLoaded)
+        }
+        var parts: [String] = []
+        if let checkedAt = snapshot.latestCheckedAt ?? snapshot.updatedAt {
+            parts.append(
+                "\(l10n.text(.rateLimitResetTodayLastCheck)) \(DurationFormatter.relativePast(since: checkedAt, language: l10n.language))")
+        }
+        if let resetAt = snapshot.resetAt {
+            parts.append(
+                "\(l10n.text(.lastReset)) \(DurationFormatter.relativePast(since: resetAt, language: l10n.language))")
+        } else if snapshot.state == .no {
+            parts.append(l10n.text(.rateLimitResetTodayAwaiting))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private var hasTweetRow: Bool {
+        snapshot?.tweetURL != nil || snapshot?.displayTweetLine != nil
+    }
+
+    private var tweetLineText: String {
+        if let line = snapshot?.displayTweetLine, !line.isEmpty {
+            return line
+        }
+        return l10n.text(.rateLimitResetTodayLatestTweet)
+    }
+
+    private var heroTitle: String {
+        guard let snapshot else {
+            return isRefreshing ? "…" : "—"
+        }
+        switch snapshot.state {
+        case .yes:
+            return l10n.text(.rateLimitResetTodayYes)
+        case .no:
+            return l10n.text(.rateLimitResetTodayNo)
+        case .unknown:
+            return l10n.text(.rateLimitResetTodayUnknown)
+        }
+    }
+
+    private var heroSubtitle: String {
+        if snapshot == nil {
+            return l10n.text(isRefreshing ? .calculating : .notLoaded)
+        }
+        switch snapshot?.state {
+        case .yes:
+            return l10n.text(.rateLimitResetTodayYesHint)
+        case .no:
+            return l10n.text(.rateLimitResetTodayNoHint)
+        case .unknown, .none:
+            return l10n.text(.rateLimitResetTodayUnknownHint)
+        }
+    }
+
+    private var heroColor: Color {
+        guard let snapshot else { return Color(nsColor: .secondaryLabelColor) }
+        switch snapshot.state {
+        case .yes:
+            return Color(nsColor: .systemGreen)
+        case .no:
+            return Color(nsColor: .systemOrange)
+        case .unknown:
+            return Color(nsColor: .secondaryLabelColor)
+        }
+    }
+
+    private var heroBackground: some View {
+        LinearGradient(
+            colors: [
+                heroColor.opacity(0.12),
+                Color(nsColor: .systemBlue).opacity(0.05),
+                RunwaySurface.subtleFill,
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing)
+    }
+}
+
 struct ResetCreditsSummaryView: View {
     var summary: ResetCreditSummary?
     var l10n: L10n
@@ -294,14 +511,42 @@ struct RefreshableSectionHeader: View {
     var l10n: L10n
     var isRefreshing: Bool
     var onRefresh: () -> Void
+    /// Small caption shown before the info / refresh controls (e.g. last refreshed).
+    var trailingCaption: String? = nil
+    var onInfo: (() -> Void)? = nil
+    var infoHelp: String? = nil
 
-    @State private var isHovered = false
+    @State private var isRefreshHovered = false
+    @State private var isInfoHovered = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 6) {
             Label(title, systemImage: systemImage)
                 .font(.headline)
             Spacer(minLength: 0)
+            if let trailingCaption, !trailingCaption.isEmpty {
+                Text(trailingCaption)
+                    .font(.caption2)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
+            }
+            if let onInfo {
+                headerIconButton(
+                    systemImage: "exclamationmark.circle",
+                    isHovered: isInfoHovered,
+                    help: infoHelp ?? l10n.text(.rateLimitResetTodaySourceTitle),
+                    action: onInfo)
+                .onHover { hovering in
+                    isInfoHovered = hovering
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+            }
             Button(action: onRefresh) {
                 Group {
                     if isRefreshing {
@@ -311,10 +556,10 @@ struct RefreshableSectionHeader: View {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
-                .foregroundStyle(isHovered && !isRefreshing ? Color.accentColor : Color.primary)
+                .foregroundStyle(isRefreshHovered && !isRefreshing ? Color.accentColor : Color.primary)
                 .frame(width: 24, height: 24)
                 .background(
-                    isHovered && !isRefreshing ? Color.accentColor.opacity(0.12) : Color.clear,
+                    isRefreshHovered && !isRefreshing ? Color.accentColor.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(RoundedRectangle(cornerRadius: 6))
             }
@@ -323,7 +568,7 @@ struct RefreshableSectionHeader: View {
             .help(l10n.text(.refresh))
             .accessibilityLabel(l10n.text(.refresh))
             .onHover { hovering in
-                isHovered = hovering
+                isRefreshHovered = hovering
                 if hovering, !isRefreshing {
                     NSCursor.pointingHand.push()
                 } else {
@@ -331,5 +576,67 @@ struct RefreshableSectionHeader: View {
                 }
             }
         }
+    }
+
+    private func headerIconButton(
+        systemImage: String,
+        isHovered: Bool,
+        help: String,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body)
+                .foregroundStyle(isHovered ? Color.accentColor : Color.secondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    isHovered ? Color.accentColor.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+private struct RateLimitResetTodaySourceSheet: View {
+    var l10n: L10n
+    var onOpenSource: () -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(l10n.text(.rateLimitResetTodaySourceTitle))
+                .font(.title3.weight(.semibold))
+
+            Text(l10n.text(.rateLimitResetTodaySourceInfo))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: onOpenSource) {
+                HStack(spacing: 6) {
+                    Image(systemName: "link")
+                    Text(l10n.text(.rateLimitResetTodaySource))
+                        .underline()
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Color(nsColor: .linkColor))
+            }
+            .buttonStyle(.plain)
+            .help(l10n.text(.rateLimitResetTodayOpenSource))
+
+            HStack {
+                Spacer()
+                Button(l10n.text(.ok), action: onDismiss)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 320)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }

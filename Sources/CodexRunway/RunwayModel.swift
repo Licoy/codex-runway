@@ -10,6 +10,7 @@ enum CostRangeQueryError: Error {
 enum RunwayRefreshSection: CaseIterable, Hashable {
     case quota
     case resetCredits
+    case rateLimitResetToday
     case apiCost
     case sessionRepair
     case recentSessions
@@ -23,6 +24,7 @@ struct RunwayModelServices: Sendable {
     var loadValidAuth: @Sendable (_ preferCached: Bool, _ cachedAuth: CodexAuth?) async throws -> CodexAuth
     var fetchQuota: @Sendable (CodexAuth) async throws -> QuotaSnapshot
     var fetchResetCredits: @Sendable (CodexAuth) async throws -> ResetCreditsSnapshot
+    var fetchRateLimitResetToday: @Sendable () async throws -> RateLimitResetTodaySnapshot
     var scanAPIEquivalent: @Sendable (
         [ApiCostQuery],
         Date,
@@ -36,6 +38,7 @@ struct RunwayModelServices: Sendable {
     static func live(
         authStore: CodexAuthStore = CodexAuthStore(),
         quotaClient: QuotaClient = QuotaClient(),
+        rateLimitResetTodayClient: RateLimitResetTodayClient = RateLimitResetTodayClient(),
         sessionRepair: SessionRepairService = SessionRepairService(),
         sessionActivityScanner: SessionActivityScanner = SessionActivityScanner()) -> Self
     {
@@ -83,6 +86,9 @@ struct RunwayModelServices: Sendable {
             fetchResetCredits: { auth in
                 try await quotaClient.fetchResetCredits(auth: auth)
             },
+            fetchRateLimitResetToday: {
+                try await rateLimitResetTodayClient.fetchStatus()
+            },
             scanAPIEquivalent: { queries, calculatedAt, policy, progress in
                 try await costRepository.summaries(
                     for: queries,
@@ -127,17 +133,20 @@ final class RunwayModel: ObservableObject {
     @Published var statusText: String
     @Published var quotaText: String
     @Published var resetCreditsText: String
+    @Published var rateLimitResetTodayText: String
     @Published var costText: String
     @Published var costSubtitle: String
     @Published var sessionText: String
     @Published var quotaLines: [DetailLine] = []
     @Published var resetCreditLines: [DetailLine] = []
+    @Published var rateLimitResetTodayLines: [DetailLine] = []
     @Published var costLines: [DetailLine] = []
     @Published var sessionLines: [DetailLine] = []
     @Published var recentSessionLines: [DetailLine] = []
     @Published var quotaMeters: [QuotaMeter] = []
     @Published var resetCreditSummary: ResetCreditSummary?
     @Published var resetCreditDetails: [ResetCreditDetail] = []
+    @Published var rateLimitResetToday: RateLimitResetTodaySnapshot?
     @Published var costDetail: ApiEquivalentSummary?
     @Published var recentSessions: [SessionActivityItem] = []
     @Published var costScanNote: String?
@@ -168,6 +177,7 @@ final class RunwayModel: ObservableObject {
     private var latestAuth: CodexAuth?
     private var latestQuota: QuotaSnapshot?
     private var latestResetCredits: ResetCreditsSnapshot?
+    private var lastRateLimitResetTodayFetch: Date?
     private var latestCost: ApiEquivalentSummary?
     private var latestCurrentCycleFullWindow: DateInterval?
     private var latestDisplayedCost: ApiEquivalentSummary?
@@ -202,6 +212,7 @@ final class RunwayModel: ObservableObject {
         self.statusText = l10n.text(.statusLogin)
         self.quotaText = l10n.text(.notLoaded)
         self.resetCreditsText = l10n.text(.notLoaded)
+        self.rateLimitResetTodayText = l10n.text(.notLoaded)
         self.costText = l10n.text(.notScanned)
         self.costSubtitle = ""
         self.sessionText = l10n.text(.notScanned)
@@ -540,6 +551,12 @@ final class RunwayModel: ObservableObject {
         Task { await refreshResetCreditsNow() }
     }
 
+    func refreshRateLimitResetToday(force: Bool = true) {
+        guard settings.preferences.showsRateLimitResetToday else { return }
+        guard !isRefreshing(.rateLimitResetToday) else { return }
+        Task { await refreshRateLimitResetTodayNow(force: force) }
+    }
+
     func refreshCost(policy: UsageCostRefreshPolicy = .force) {
         guard !isRefreshingAll,
               !refreshingSections.contains(.apiCost),
@@ -560,6 +577,7 @@ final class RunwayModel: ObservableObject {
         if let latestDisplayedCost, let latestDisplayedCostRange {
             costSubtitle = costSubtitle(for: latestDisplayedCost, range: latestDisplayedCostRange, now: now)
         }
+        refreshRateLimitResetTodayIfDue(now: now)
     }
 
     func nextDueQuotaReset(after triggeredReset: Date?, now: Date = Date()) -> Date? {
@@ -621,6 +639,15 @@ final class RunwayModel: ObservableObject {
             quotaLines = []
         }
         if let latestResetCredits { applyResetCredits(latestResetCredits) } else { resetCreditsText = l10n.text(.notLoaded) }
+        if let rateLimitResetToday {
+            applyRateLimitResetToday(rateLimitResetToday)
+        } else if settings.preferences.showsRateLimitResetToday {
+            rateLimitResetTodayText = l10n.text(.notLoaded)
+            rateLimitResetTodayLines = []
+        } else {
+            rateLimitResetTodayText = l10n.text(.notLoaded)
+            rateLimitResetTodayLines = []
+        }
         if let latestDisplayedCost, let latestDisplayedCostRange {
             applyDisplayedCost(latestDisplayedCost, range: latestDisplayedCostRange, clearsScanNote: false)
         } else {
@@ -629,6 +656,10 @@ final class RunwayModel: ObservableObject {
         }
         if let latestSessionReport { applySessionReport(latestSessionReport) } else { sessionText = l10n.text(.notScanned) }
         applyRecentSessions(recentSessions)
+        // Turning the section on should fetch promptly without waiting for the next due tick.
+        if settings.preferences.showsRateLimitResetToday, rateLimitResetToday == nil {
+            refreshRateLimitResetToday(force: true)
+        }
     }
 
     private func refreshSessionReportNow() async {
@@ -892,6 +923,92 @@ final class RunwayModel: ObservableObject {
                 resetCreditLines = [DetailLine(title: l10n.text(.error), value: error.localizedDescription)]
                 lastError = error.localizedDescription
             }
+        }
+    }
+
+    private func refreshRateLimitResetTodayIfDue(now: Date) {
+        guard settings.preferences.showsRateLimitResetToday else { return }
+        guard !isRefreshing(.rateLimitResetToday) else { return }
+        let interval = TimeInterval(settings.preferences.rateLimitResetTodayRefreshIntervalSeconds)
+        if let last = lastRateLimitResetTodayFetch, now.timeIntervalSince(last) < interval {
+            return
+        }
+        refreshRateLimitResetToday(force: false)
+    }
+
+    private func refreshRateLimitResetTodayNow(force: Bool) async {
+        guard settings.preferences.showsRateLimitResetToday else { return }
+        if !force,
+           let last = lastRateLimitResetTodayFetch
+        {
+            let interval = TimeInterval(settings.preferences.rateLimitResetTodayRefreshIntervalSeconds)
+            if Date().timeIntervalSince(last) < interval { return }
+        }
+        await withRefresh([.rateLimitResetToday]) {
+            do {
+                let snapshot = try await services.fetchRateLimitResetToday()
+                applyRateLimitResetToday(snapshot)
+                lastRateLimitResetTodayFetch = Date()
+            } catch {
+                lastRateLimitResetTodayFetch = Date()
+                // Keep the last good snapshot; only mark error text when nothing is loaded yet.
+                if rateLimitResetToday == nil {
+                    rateLimitResetTodayText = l10n.text(.statusError)
+                    rateLimitResetTodayLines = [
+                        DetailLine(title: l10n.text(.error), value: error.localizedDescription),
+                    ]
+                }
+            }
+        }
+    }
+
+    private func applyRateLimitResetToday(_ snapshot: RateLimitResetTodaySnapshot) {
+        rateLimitResetToday = snapshot
+        rateLimitResetTodayText = rateLimitResetTodayStateText(snapshot.state)
+        var lines: [DetailLine] = [
+            DetailLine(title: l10n.text(.status), value: rateLimitResetTodayHintText(snapshot.state)),
+        ]
+        if let checkedAt = snapshot.latestCheckedAt ?? snapshot.updatedAt {
+            lines.append(
+                DetailLine(
+                    title: l10n.text(.rateLimitResetTodayLastCheck),
+                    value: DurationFormatter.relativePast(since: checkedAt, language: l10n.language)))
+        }
+        if let tweet = snapshot.displayTweetLine {
+            lines.append(DetailLine(title: l10n.text(.rateLimitResetTodayLatestTweet), value: tweet))
+        }
+        if let resetAt = snapshot.resetAt {
+            lines.append(
+                DetailLine(
+                    title: l10n.text(.lastReset),
+                    value: ResetCreditDateFormatter.updatedAt(resetAt, language: l10n.language)))
+        }
+        lines.append(
+            DetailLine(
+                title: l10n.text(.rateLimitResetTodayLastFetched),
+                value: DurationFormatter.relativePast(since: snapshot.fetchedAt, language: l10n.language)))
+        rateLimitResetTodayLines = lines
+    }
+
+    private func rateLimitResetTodayStateText(_ state: RateLimitResetTodayState) -> String {
+        switch state {
+        case .yes:
+            return l10n.text(.rateLimitResetTodayYes)
+        case .no:
+            return l10n.text(.rateLimitResetTodayNo)
+        case .unknown:
+            return l10n.text(.rateLimitResetTodayUnknown)
+        }
+    }
+
+    private func rateLimitResetTodayHintText(_ state: RateLimitResetTodayState) -> String {
+        switch state {
+        case .yes:
+            return l10n.text(.rateLimitResetTodayYesHint)
+        case .no:
+            return l10n.text(.rateLimitResetTodayNoHint)
+        case .unknown:
+            return l10n.text(.rateLimitResetTodayUnknownHint)
         }
     }
 

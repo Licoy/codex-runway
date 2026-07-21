@@ -77,10 +77,30 @@ struct PreferencesTests {
         #expect(store.load().showsCostSummary == false)
         #expect(store.load().showsRecentSessions)
         #expect(store.load().showsSessionRepairSummary == false)
+        #expect(store.load().showsRateLimitResetToday)
+        #expect(store.load().rateLimitResetTodayRefreshIntervalSeconds == 3_600)
         #expect(store.load().automaticallyChecksForUpdates == false)
         #expect(store.load().quotaAlertsEnabled)
         #expect(store.load().resetCreditAlertsEnabled)
         #expect(store.load().exportsStatusJSON)
+    }
+
+    @Test("old preferences default rate-limit-reset-today section on with 1h refresh")
+    func oldPreferencesDefaultRateLimitResetToday() throws {
+        let data = """
+        {
+          "language": "english",
+          "appearance": "dark",
+          "refreshIntervalSeconds": 300,
+          "showsCostSummary": true,
+          "showsSessionRepairSummary": true
+        }
+        """.data(using: .utf8)!
+
+        let preferences = try JSONDecoder().decode(RunwayPreferences.self, from: data)
+
+        #expect(preferences.showsRateLimitResetToday)
+        #expect(preferences.rateLimitResetTodayRefreshIntervalSeconds == 3_600)
     }
 
     @Test("old preferences use new status bar defaults")

@@ -58,6 +58,19 @@ struct RunwayPopoverView: View {
                     l10n: l10n,
                     isRefreshing: model.isRefreshing(.quota),
                     onRefresh: { model.refreshQuota() })
+                if settings.preferences.showsRateLimitResetToday {
+                    RateLimitResetTodayView(
+                        snapshot: model.rateLimitResetToday,
+                        l10n: l10n,
+                        isRefreshing: model.isRefreshing(.rateLimitResetToday),
+                        onRefresh: { model.refreshRateLimitResetToday(force: true) },
+                        onOpenSource: {
+                            ExternalURLLauncher.open(RateLimitResetTodayClient.siteURL)
+                        },
+                        onOpenTweet: { url in
+                            ExternalURLLauncher.open(url)
+                        })
+                }
                 ResetCreditsSummaryView(
                     summary: model.resetCreditSummary,
                     l10n: l10n,

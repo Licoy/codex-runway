@@ -29,6 +29,9 @@ struct RunwayModelRefreshTests {
                 await recorder.record("reset-finish")
                 return ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date())
             },
+            fetchRateLimitResetToday: {
+                RateLimitResetTodaySnapshot(state: .no, fetchedAt: Date())
+            },
             scanAPIEquivalent: { queries, now, _, _ in
                 await recorder.record("cost-start")
                 try await Task.sleep(for: .milliseconds(160))
@@ -180,6 +183,9 @@ struct RunwayModelRefreshTests {
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
+            fetchRateLimitResetToday: {
+                RateLimitResetTodaySnapshot(state: .no, fetchedAt: Date())
+            },
             scanAPIEquivalent: { queries, now, policy, _ in
                 await recorder.record(queries: queries, now: now, policy: policy)
                 return Dictionary(uniqueKeysWithValues: queries.map { query in
@@ -257,6 +263,9 @@ struct RunwayModelRefreshTests {
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in Self.quotaSnapshot() },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
+            fetchRateLimitResetToday: {
+                RateLimitResetTodaySnapshot(state: .no, fetchedAt: Date())
+            },
             scanAPIEquivalent: { queries, now, _, _ in
                 try await Task.sleep(for: .milliseconds(80))
                 return Self.costSummaries(for: queries, calculatedAt: now)
@@ -414,6 +423,9 @@ struct RunwayModelRefreshTests {
             loadValidAuth: { _, _ in Self.auth() },
             fetchQuota: { _ in quota },
             fetchResetCredits: { _ in ResetCreditsSnapshot(availableCount: 0, credits: [], updatedAt: Date()) },
+            fetchRateLimitResetToday: {
+                RateLimitResetTodaySnapshot(state: .no, fetchedAt: Date())
+            },
             scanAPIEquivalent: { queries, now, policy, _ in
                 await recorder.record(queries: queries, now: now, policy: policy)
                 return Self.costSummaries(for: queries, calculatedAt: now)

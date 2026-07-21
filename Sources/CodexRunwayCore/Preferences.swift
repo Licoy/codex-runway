@@ -113,6 +113,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case language
     case languageEnglish
     case languageSimplifiedChinese
+    case lastReset
     case lastUpdated
     case later
     case left
@@ -167,6 +168,28 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case quotaAlerts
     case quit
     case rawAnalyticsCredits
+    case rateLimitResetToday
+    case rateLimitResetTodayAwaiting
+    case rateLimitResetTodayCheckCost
+    case rateLimitResetTodayConfidence
+    case rateLimitResetTodayDescription
+    case rateLimitResetTodayLastCheck
+    case rateLimitResetTodayLastFetched
+    case rateLimitResetTodayLatestTweet
+    case rateLimitResetTodayNo
+    case rateLimitResetTodayNoHint
+    case rateLimitResetTodayOpenSource
+    case rateLimitResetTodayOpenTweet
+    case rateLimitResetTodayRefreshInterval
+    case rateLimitResetTodaySeen
+    case rateLimitResetTodaySource
+    case rateLimitResetTodaySourceInfo
+    case rateLimitResetTodaySourceTitle
+    case rateLimitResetTodayUnknown
+    case rateLimitResetTodayUnknownHint
+    case rateLimitResetTodayVerdict
+    case rateLimitResetTodayYes
+    case rateLimitResetTodayYesHint
     case recent
     case recentSessionsDescription
     case refresh
@@ -193,6 +216,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case selfCheck
     case showDetails
     case showCostSummary
+    case showRateLimitResetToday
     case showRecentSessions
     case showSessionRepairSummary
     case sourceLocalSessions
