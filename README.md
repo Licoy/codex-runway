@@ -8,12 +8,14 @@
 
 你的 Codex 还可以跑多久？
 
-Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏查看 Codex 配额、reset credits、API 等价成本与本机会话，并支持多账号管理、安全切号与内置更新检测。
+Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏查看 Codex 配额、今日是否重置、reset credits、API 等价成本与本机会话，并支持多账号管理、安全切号与内置更新检测。
 
 ## 亮点
 
 - 菜单栏查看 Codex 剩余额度。
 - 查看 5 小时、每周和附加额度窗口。
+- 查看今日速率限制是否已重置（第三方公开状态）；有下次重置窗口时显示倒计时，可跳转相关推文。
+- 设置中可开关「今日是否重置」栏目，并单独配置其刷新间隔（默认开启、每 1 小时）。
 - 管理多个 Codex 账号：浏览器登录、导入本机 `auth.json`、粘贴 token / JSON（含 `/auth/session`）、导入文件或 API Key。
 - 确认后安全切号，原子写回 `~/.codex/auth.json`，可选立即重启 Codex，使 CLI / IDE 同步。
 - 显示当前账号、订阅类型与到期信息。
@@ -101,6 +103,12 @@ swift build -c release
 ## 社区支持
 
 - [LinuxDO](https://linux.do/)
+
+## 数据来源
+
+- **今日是否重置**：状态来自第三方公开站点 [hascodexratelimitreset.today](https://hascodexratelimitreset.today/) 及其 `api/status` 接口。Codex Runway 仅拉取公开结果，不附带任何 Codex 账号或 token；结果仅供参考，应用不控制也不保证该数据源的准确性与可用性。
+- **配额 / reset credits / 部分在线用量**：在你已登录的前提下，通过本机凭据访问官方 ChatGPT / Codex 后端接口。
+- **API 等价成本与最近会话**：默认基于本机 `~/.codex` 会话日志与本地索引计算。
 
 ## 许可证
 

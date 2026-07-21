@@ -8,12 +8,14 @@
 
 How much longer can your Codex keep running?
 
-Codex Runway is a native macOS menu bar app for checking Codex quota, reset credits, API-equivalent cost, and local sessions, with multi-account management, safe account switching, and built-in update checks.
+Codex Runway is a native macOS menu bar app for checking Codex quota, whether rate limits reset today, reset credits, API-equivalent cost, and local sessions, with multi-account management, safe account switching, and built-in update checks.
 
 ## Highlights
 
 - Check remaining Codex quota from the menu bar.
 - View 5-hour, weekly, and additional quota windows.
+- See whether Codex rate limits have reset today from a public third-party status feed, with a countdown to the next reset window when available and a jump to the related post.
+- Toggle the “reset today?” section in settings and configure its own refresh interval (on by default, every 1 hour).
 - Manage multiple Codex accounts: browser sign-in, import local `auth.json`, paste token/JSON (including `/auth/session`), import files, or add an API key.
 - Switch accounts safely after confirmation by atomically writing `~/.codex/auth.json`, with an optional Codex restart so CLI / IDE stay in sync.
 - Show the current account, subscription tier, and expiration.
@@ -97,6 +99,12 @@ swift build -c release
 ```
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for contribution notes.
+
+## Data sources
+
+- **Reset today?**: Status comes from the public third-party site [hascodexratelimitreset.today](https://hascodexratelimitreset.today/) and its `api/status` endpoint. Codex Runway only fetches the published result and never attaches Codex accounts or tokens. Treat it as advisory — this app does not control or guarantee that source’s accuracy or availability.
+- **Quota / reset credits / some online usage**: When you are signed in, requests use your local credentials against the official ChatGPT / Codex backend APIs.
+- **API-equivalent cost and recent sessions**: Computed by default from local `~/.codex` session logs and the local index.
 
 ## License
 
