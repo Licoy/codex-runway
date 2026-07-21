@@ -241,6 +241,9 @@ struct RateLimitResetTodayView: View {
 
             VStack(spacing: 8) {
                 hero
+                if hasNextResetCountdown {
+                    nextResetCountdownRow
+                }
                 if hasTweetRow {
                     tweetRow
                 }
@@ -296,6 +299,35 @@ struct RateLimitResetTodayView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var hasNextResetCountdown: Bool {
+        snapshot?.nextResetRemaining() != nil
+    }
+
+    private var nextResetCountdownRow: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let remaining = snapshot?.nextResetRemaining(now: context.date)
+            HStack(spacing: 8) {
+                Image(systemName: "timer")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(heroColor)
+
+                Text(l10n.text(.nextResetIn))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+
+                Spacer(minLength: 4)
+
+                Text(remaining.map { DurationFormatter.localized($0, language: l10n.language) } ?? "—")
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(heroColor)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(heroColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+        }
     }
 
     private var tweetRow: some View {

@@ -117,4 +117,21 @@ struct RateLimitResetTodayTests {
         #expect(RateLimitResetTodaySnapshot.date(fromEpoch: nil) == nil)
         #expect(RateLimitResetTodaySnapshot.date(fromEpoch: 0) == nil)
     }
+
+    @Test("yes-countdown mock exposes a future next reset window")
+    func yesCountdownMockExposesFutureNextResetWindow() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = RateLimitResetTodaySnapshot.devMock(kind: .yesCountdown, now: now)
+        #expect(snapshot.state == .yes)
+        #expect(snapshot.nextResetRemaining(now: now) != nil)
+        #expect((snapshot.nextResetRemaining(now: now) ?? 0) > 17 * 3_600)
+    }
+
+    @Test("plain yes mock has no active countdown")
+    func plainYesMockHasNoActiveCountdown() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = RateLimitResetTodaySnapshot.devMock(kind: .yes, now: now)
+        #expect(snapshot.state == .yes)
+        #expect(snapshot.nextResetRemaining(now: now) == nil)
+    }
 }

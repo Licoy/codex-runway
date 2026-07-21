@@ -88,6 +88,136 @@ public struct RateLimitResetTodaySnapshot: Sendable, Equatable {
         self.fetchedAt = fetchedAt
     }
 
+    /// Next expected auto-reset, when `resetAt` + `autoResetHours` is still in the future.
+    public var nextResetAt: Date? {
+        guard let resetAt, let hours = autoResetHours, hours > 0 else { return nil }
+        return resetAt.addingTimeInterval(TimeInterval(hours * 3_600))
+    }
+
+    public func nextResetRemaining(now: Date = Date()) -> TimeInterval? {
+        guard let nextResetAt, nextResetAt > now else { return nil }
+        return nextResetAt.timeIntervalSince(now)
+    }
+
+    /// Dev/preview fixture kinds for UI work without hitting the public API.
+    public enum DevMockKind: String, Sendable, Equatable {
+        case yes
+        /// Today already reset, with a live countdown to the next auto-reset window.
+        case yesCountdown = "yes-countdown"
+        case no
+        case unknown
+
+        public var state: RateLimitResetTodayState {
+            switch self {
+            case .yes, .yesCountdown:
+                return .yes
+            case .no:
+                return .no
+            case .unknown:
+                return .unknown
+            }
+        }
+
+        public static func parse(_ raw: String) -> DevMockKind? {
+            switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "yes", "y", "1", "true":
+                return .yes
+            case "yes-countdown", "yes_countdown", "countdown":
+                return .yesCountdown
+            case "no", "n", "0", "false":
+                return .no
+            case "unknown":
+                return .unknown
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// Dev/preview fixture for UI work without hitting the public API.
+    public static func devMock(
+        state: RateLimitResetTodayState,
+        now: Date = Date()) -> RateLimitResetTodaySnapshot
+    {
+        switch state {
+        case .yes:
+            return devMock(kind: .yes, now: now)
+        case .no:
+            return devMock(kind: .no, now: now)
+        case .unknown:
+            return devMock(kind: .unknown, now: now)
+        }
+    }
+
+    public static func devMock(
+        kind: DevMockKind,
+        now: Date = Date()) -> RateLimitResetTodaySnapshot
+    {
+        switch kind {
+        case .yes:
+            // Reset far enough in the past that the next auto-window has already elapsed.
+            return RateLimitResetTodaySnapshot(
+                state: .yes,
+                resetAt: now.addingTimeInterval(-25 * 3_600),
+                updatedAt: now.addingTimeInterval(-15 * 60),
+                autoResetHours: 20,
+                yesSubtitles: ["Limits reset, go crazy", "You can just build things"],
+                noSubtitles: [],
+                confidence: 0.97,
+                tweetURL: URL(string: "https://x.com/thsottiaux/status/2079433708986319143"),
+                tweetText: "Rate limits are fully reset — go build something great today.",
+                model: "gpt-5.4",
+                latestCheckedAt: now.addingTimeInterval(-12 * 60),
+                latestVerdict: "reset",
+                latestUsage: RateLimitResetTodayUsage(inputTokens: 412, outputTokens: 88, reasoningTokens: 30),
+                lastResetCheckedAt: now.addingTimeInterval(-25 * 3_600),
+                lastResetVerdict: "reset",
+                fetchedAt: now.addingTimeInterval(-90))
+        case .yesCountdown:
+            // Reset ~2h ago with a 20h auto window → ~18h countdown remaining.
+            return RateLimitResetTodaySnapshot(
+                state: .yes,
+                resetAt: now.addingTimeInterval(-2 * 3_600 - 17 * 60),
+                updatedAt: now.addingTimeInterval(-8 * 60),
+                autoResetHours: 20,
+                yesSubtitles: ["Limits reset, go crazy", "You can just build things"],
+                noSubtitles: [],
+                confidence: 0.98,
+                tweetURL: URL(string: "https://x.com/thsottiaux/status/2079433708986319143"),
+                tweetText: "Limits are clear again. Clock is already ticking on the next window.",
+                model: "gpt-5.4",
+                latestCheckedAt: now.addingTimeInterval(-5 * 60),
+                latestVerdict: "reset",
+                latestUsage: RateLimitResetTodayUsage(inputTokens: 390, outputTokens: 74, reasoningTokens: 28),
+                lastResetCheckedAt: now.addingTimeInterval(-2 * 3_600 - 17 * 60),
+                lastResetVerdict: "reset",
+                fetchedAt: now.addingTimeInterval(-45))
+        case .no:
+            return RateLimitResetTodaySnapshot(
+                state: .no,
+                resetAt: nil,
+                updatedAt: now.addingTimeInterval(-6 * 3_600),
+                autoResetHours: 20,
+                yesSubtitles: [],
+                noSubtitles: ["Back to your local model peasant"],
+                confidence: 0.99,
+                tweetURL: URL(string: "https://x.com/thsottiaux/status/2079433708986319143"),
+                tweetText: "@Kappaemme1926 We are being very subtle. Use \"Approve for me\" instead.",
+                model: "gpt-5.4",
+                latestCheckedAt: now.addingTimeInterval(-6 * 3_600),
+                latestVerdict: "not_reset",
+                latestUsage: RateLimitResetTodayUsage(inputTokens: 371, outputTokens: 69, reasoningTokens: 25),
+                lastResetCheckedAt: nil,
+                lastResetVerdict: nil,
+                fetchedAt: now.addingTimeInterval(-180))
+        case .unknown:
+            return RateLimitResetTodaySnapshot(
+                state: .unknown,
+                updatedAt: now,
+                fetchedAt: now)
+        }
+    }
+
     /// One-line tweet preview for the UI (empty text falls back to host).
     public var displayTweetLine: String? {
         if let tweetText {
