@@ -2,6 +2,14 @@ import AppKit
 import CodexRunwayCore
 import SwiftUI
 
+enum ControlPanelTab: Hashable {
+    case general
+    case accounts
+    case display
+    case advanced
+    case about
+}
+
 struct ControlPanelView: View {
     static let githubURL = URL(string: "https://github.com/Licoy/codex-runway")!
     private static let feedbackURL = URL(string: "https://github.com/Licoy/codex-runway/issues/new")!
@@ -9,17 +17,34 @@ struct ControlPanelView: View {
     @ObservedObject var settings: RunwaySettings
     @ObservedObject var model: RunwayModel
     var checkForUpdates: () -> Void
+    var initialTab: ControlPanelTab = .general
 
-    @State private var selectedTab = ControlPanelTab.general
+    @State private var selectedTab: ControlPanelTab
     @State private var confirmRepair = false
     @State private var notificationMessage: String?
     private var l10n: L10n { settings.l10n }
+
+    init(
+        settings: RunwaySettings,
+        model: RunwayModel,
+        checkForUpdates: @escaping () -> Void,
+        initialTab: ControlPanelTab = .general)
+    {
+        self.settings = settings
+        self.model = model
+        self.checkForUpdates = checkForUpdates
+        self.initialTab = initialTab
+        _selectedTab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         TabView(selection: $selectedTab) {
             generalPane
                 .tabItem { Label(l10n.text(.general), systemImage: "gearshape") }
                 .tag(ControlPanelTab.general)
+            AccountsSettingsPane(model: model, l10n: l10n)
+                .tabItem { Label(l10n.text(.accounts), systemImage: "person.2") }
+                .tag(ControlPanelTab.accounts)
             displayPane
                 .tabItem { Label(l10n.text(.display), systemImage: "eye") }
                 .tag(ControlPanelTab.display)
@@ -296,8 +321,6 @@ struct ControlPanelView: View {
     }
 }
 
-private enum ControlPanelTab: Hashable { case general, display, advanced, about }
-
 private struct AboutLogoView: View {
     var body: some View {
         Group {
@@ -373,7 +396,7 @@ private extension ApiCostSummaryRange {
     }
 }
 
-private struct PreferencesPane<Content: View>: View {
+struct PreferencesPane<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -388,7 +411,7 @@ private struct PreferencesPane<Content: View>: View {
     }
 }
 
-private struct SettingsSection<Content: View>: View {
+struct SettingsSection<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -399,7 +422,7 @@ private struct SettingsSection<Content: View>: View {
     }
 }
 
-private struct SectionLabel: View {
+struct SectionLabel: View {
     var title: String
 
     init(_ title: String) {

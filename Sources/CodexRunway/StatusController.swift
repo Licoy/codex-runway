@@ -152,7 +152,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
             settings: settings,
             checkForUpdates: { [weak self] in self?.updaterService.checkForUpdates() },
             openGitHub: { ExternalURLLauncher.open(ControlPanelView.githubURL) },
-            openControlPanel: { [weak self] in self?.showControlPanel() })
+            openControlPanel: { [weak self] tab in self?.showControlPanel(tab: tab) })
     }
 
     private func eventHitsStatusButton(_ event: NSEvent) -> Bool {
@@ -361,7 +361,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
         }
     }
 
-    private func showControlPanel() {
+    private func showControlPanel(tab: ControlPanelTab = .general) {
         let window = controlPanelWindow ?? NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 546, height: 662),
             styleMask: [.titled, .closable],
@@ -370,10 +370,12 @@ final class StatusController: NSObject, NSPopoverDelegate {
         window.title = settings.l10n.text(.controlPanel)
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 546, height: 662))
+        // Rebuild hosting view so initial tab selection is applied every open.
         window.contentViewController = NSHostingController(rootView: ControlPanelView(
             settings: settings,
             model: model,
-            checkForUpdates: { [weak self] in self?.updaterService.checkForUpdates() }))
+            checkForUpdates: { [weak self] in self?.updaterService.checkForUpdates() },
+            initialTab: tab))
         controlPanelWindow = window
         applyAppearance()
         NSApp.activate(ignoringOtherApps: true)

@@ -6,6 +6,8 @@ public struct CodexAuth: Codable, Sendable, Equatable {
     public var lastRefresh: String?
     public var planType: String?
     public var authFilePlanType: String?
+    /// Present for API-key style auth files (and some mixed official files).
+    public var openAIAPIKey: String?
 
     public struct Tokens: Codable, Sendable, Equatable {
         public var idToken: String?
@@ -20,12 +22,73 @@ public struct CodexAuth: Codable, Sendable, Equatable {
             self.accountId = accountId
         }
 
+        public static let empty = Tokens(idToken: nil, accessToken: "", refreshToken: "", accountId: nil)
+
+        public var hasOAuthTokens: Bool {
+            !accessToken.isEmpty || !refreshToken.isEmpty
+        }
+
         enum CodingKeys: String, CodingKey {
             case idToken = "id_token"
             case accessToken = "access_token"
             case refreshToken = "refresh_token"
             case accountId = "account_id"
         }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            idToken = try container.decodeIfPresent(String.self, forKey: .idToken)
+            accessToken = try container.decodeIfPresent(String.self, forKey: .accessToken) ?? ""
+            refreshToken = try container.decodeIfPresent(String.self, forKey: .refreshToken) ?? ""
+            accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            // Codex auth.json expects refresh_token key to exist (may be empty for session tokens).
+            if let idToken, !idToken.isEmpty {
+                try container.encode(idToken, forKey: .idToken)
+            }
+            try container.encode(accessToken, forKey: .accessToken)
+            try container.encode(refreshToken, forKey: .refreshToken)
+            if let accountId, !accountId.isEmpty {
+                try container.encode(accountId, forKey: .accountId)
+            }
+        }
+    }
+
+    /// Whether this credential is safe to install as `~/.codex/auth.json` for the Codex app/CLI.
+    /// Access-token-only session credentials (e.g. chatgpt.com/api/auth/session) are usable while
+    /// the access JWT is still valid — matching other multi-account tools.
+    public enum LoginUsability: Sendable, Equatable {
+        case usable
+        /// Access token is expired (or missing) and there is no refresh_token to renew it.
+        case expiredAccessWithoutRefresh
+        case invalidTokens
+    }
+
+    public var loginUsability: LoginUsability {
+        if isAPIKeyAuth {
+            if let key = openAIAPIKey, key.count >= 8 { return .usable }
+            return .invalidTokens
+        }
+        // Reject placeholders / truncated junk written by failed switches.
+        guard tokens.accessToken.count >= 40 else { return .invalidTokens }
+        if canRefreshOAuth {
+            // Real refresh tokens are long; short strings are corrupt.
+            if tokens.refreshToken.count < 20 { return .invalidTokens }
+            return .usable
+        }
+        // Session-style: access only. Allow switch while JWT still valid.
+        if TokenInspector.isExpired(tokens.accessToken) {
+            return .expiredAccessWithoutRefresh
+        }
+        return .usable
+    }
+
+    /// True when this is a browser-session style credential (access JWT, no refresh).
+    public var isAccessTokenOnly: Bool {
+        !isAPIKeyAuth && tokens.accessToken.count >= 40 && tokens.refreshToken.isEmpty
     }
 
     public init(
@@ -33,13 +96,36 @@ public struct CodexAuth: Codable, Sendable, Equatable {
         tokens: Tokens,
         lastRefresh: String?,
         planType: String? = nil,
-        authFilePlanType: String? = nil)
+        authFilePlanType: String? = nil,
+        openAIAPIKey: String? = nil)
     {
         self.authMode = authMode
         self.tokens = tokens
         self.lastRefresh = lastRefresh
         self.planType = planType
         self.authFilePlanType = authFilePlanType
+        self.openAIAPIKey = openAIAPIKey
+    }
+
+    /// API-key-only credential used for managed accounts and CLI switch writes.
+    public static func apiKey(apiKey: String, baseURLHint _: String? = nil) -> CodexAuth {
+        CodexAuth(
+            authMode: "apikey",
+            tokens: .empty,
+            lastRefresh: nil,
+            planType: "api",
+            authFilePlanType: "api",
+            openAIAPIKey: apiKey)
+    }
+
+    public var isAPIKeyAuth: Bool {
+        if let key = openAIAPIKey, !key.isEmpty, !tokens.hasOAuthTokens { return true }
+        let mode = (authMode ?? "").lowercased()
+        return mode == "apikey" || mode == "api_key" || mode == "api-key"
+    }
+
+    public var canRefreshOAuth: Bool {
+        !tokens.refreshToken.isEmpty
     }
 
     enum CodingKeys: String, CodingKey {
@@ -48,10 +134,50 @@ public struct CodexAuth: Codable, Sendable, Equatable {
         case lastRefresh = "last_refresh"
         case planType = "plan_type"
         case authFilePlanType = "auth_file_plan_type"
+        case openAIAPIKey = "OPENAI_API_KEY"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        authMode = try container.decodeIfPresent(String.self, forKey: .authMode)
+        tokens = try container.decodeIfPresent(Tokens.self, forKey: .tokens) ?? .empty
+        lastRefresh = try container.decodeIfPresent(String.self, forKey: .lastRefresh)
+        planType = try container.decodeIfPresent(String.self, forKey: .planType)
+        authFilePlanType = try container.decodeIfPresent(String.self, forKey: .authFilePlanType)
+        openAIAPIKey = try container.decodeIfPresent(String.self, forKey: .openAIAPIKey)
+        if tokens.accessToken.isEmpty, tokens.refreshToken.isEmpty, openAIAPIKey == nil {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath, debugDescription: "auth.json missing tokens and OPENAI_API_KEY"))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        // Match the official auth.json shape Codex expects. Do not emit our private
+        // plan metadata fields into the file Codex watches.
+        try container.encodeIfPresent(authMode ?? (isAPIKeyAuth ? "apikey" : "chatgpt"), forKey: .authMode)
+        if isAPIKeyAuth {
+            try container.encodeIfPresent(openAIAPIKey, forKey: .openAIAPIKey)
+        } else {
+            try container.encode(tokens, forKey: .tokens)
+            try container.encodeIfPresent(lastRefresh, forKey: .lastRefresh)
+            // Keep OPENAI_API_KEY only when the original mixed auth file had one.
+            try container.encodeIfPresent(openAIAPIKey, forKey: .openAIAPIKey)
+        }
+    }
+
+    /// JSON object suitable for official `auth.json` (no runway-only keys).
+    public func officialAuthJSONObject() throws -> [String: Any] {
+        let data = try JSONEncoder().encode(self)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "auth encode failed"))
+        }
+        return object
     }
 
     public var redactedDescription: String {
-        "CodexAuth(authMode: \(authMode ?? "unknown"), accountId: \(tokens.accountId ?? "none"), idToken: <redacted>, accessToken: <redacted>, refreshToken: <redacted>)"
+        let keyFlag = openAIAPIKey == nil ? "none" : "<redacted>"
+        return "CodexAuth(authMode: \(authMode ?? "unknown"), accountId: \(tokens.accountId ?? "none"), idToken: <redacted>, accessToken: <redacted>, refreshToken: <redacted>, OPENAI_API_KEY: \(keyFlag))"
     }
 
     public mutating func mergeRefreshResponse(_ data: Data, now: Date = Date()) throws {

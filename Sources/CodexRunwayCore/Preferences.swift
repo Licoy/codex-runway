@@ -14,6 +14,49 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case about
     case advanced
     case account
+    case accounts
+    case accountsAdd
+    case accountsAddAPIKey
+    case accountsAddFile
+    case accountsAddLocal
+    case accountsAddOAuth
+    case accountsAddPaste
+    case accountsAPIKeyHint
+    case accountsCurrent
+    case accountsDelete
+    case accountsDeleteConfirmMessage
+    case accountsDeleteConfirmTitle
+    case accountsEmpty
+    case accountsImportFailed
+    case accountsImportNoCredentials
+    case accountsImportProgress
+    case accountsImportSucceeded
+    case accountsIsCurrentLogin
+    case accountsMakeCurrent
+    case accountsMoveDown
+    case accountsMoveUp
+    case accountsNeedsReauth
+    case accountsNote
+    case accountsOAuthCancelled
+    case accountsOAuthFailed
+    case accountsOAuthWaiting
+    case accountsPasteFromClipboard
+    case accountsPasteHint
+    case accountsRefreshAll
+    case accountsReauthRequired
+    case accountsRestartCodexAfterSwitch
+    case accountsRestartCodexFailed
+    case accountsRestartCodexSucceeded
+    case accountsSidebarTitle
+    case accountsSwitchConfirmMessage
+    case accountsSwitchConfirmTitle
+    case accountsSwitchFailed
+    case accountsSwitchInvalidCredential
+    case accountsSwitchMissingRefresh
+    case accountsSwitchSessionExpired
+    case accountsSwitching
+    case accountsSwitchRealHint
+    case alias
     case automaticallyCheckForUpdates
     case available
     case availableResets
@@ -82,6 +125,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case noExpiry
     case noAvailableResetCredits
     case notLoggedIn
+    case authExpired
+    case authFileInvalid
     case noPreviousIndex
     case notLoaded
     case notScanned

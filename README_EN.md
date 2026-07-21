@@ -75,8 +75,9 @@ The self-check prints local diagnostics with tokens redacted.
 
 ## Privacy
 
-- Tokens are read only from local `~/.codex/auth.json`.
-- Access tokens, refresh tokens, and ID tokens must not be written to logs, README files, issue templates, or self-check output.
+- Tokens are read from local `~/.codex/auth.json`; multi-account copies live under `~/.codex-runway/accounts/` (file mode `0600`).
+- Switching accounts atomically writes the selected credential back to `~/.codex/auth.json` so Codex CLI / IDE stay in sync.
+- Access tokens, refresh tokens, ID tokens, and API keys must not be written to logs, README files, issue templates, or self-check output.
 - API-equivalent cost is computed from local session JSONL logs by default and does not upload session contents.
 - Online usage data is used only when local token data is unavailable.
 - Session repair only touches `~/.codex/session_index.jsonl`, creates a backup before writing, and never deletes session files.

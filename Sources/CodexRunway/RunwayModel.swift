@@ -1,3 +1,4 @@
+import AppKit
 import CodexRunwayCore
 import Foundation
 import SwiftUI
@@ -50,7 +51,28 @@ struct RunwayModelServices: Sendable {
                     }
                 }
                 guard var validAuth = auth else { throw URLError(.userAuthenticationRequired) }
+                switch validAuth.loginUsability {
+                case .usable:
+                    break
+                case .invalidTokens:
+                    throw RunwayModelAuthError.load(
+                        NSError(domain: "CodexRunwayAuth", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "auth_file_invalid",
+                        ]))
+                case .expiredAccessWithoutRefresh:
+                    throw RunwayModelAuthError.load(
+                        NSError(domain: "CodexRunwayAuth", code: 2, userInfo: [
+                            NSLocalizedDescriptionKey: "auth_expired",
+                        ]))
+                }
+                // Access-token-only session credentials: use while JWT valid; do not hit refresh.
                 if TokenInspector.isExpired(validAuth.tokens.accessToken) {
+                    guard validAuth.canRefreshOAuth else {
+                        throw RunwayModelAuthError.load(
+                            NSError(domain: "CodexRunwayAuth", code: 2, userInfo: [
+                                NSLocalizedDescriptionKey: "auth_expired",
+                            ]))
+                    }
                     try await TokenRefresher().refresh(&validAuth, store: authStore)
                 }
                 return validAuth
@@ -121,6 +143,12 @@ final class RunwayModel: ObservableObject {
     @Published var costScanNote: String?
     @Published private(set) var costScanProgress: CostScanProgress = .idle
     @Published var accountDisplay: CodexAccountDisplay
+    @Published var managedAccounts: [ManagedAccount] = []
+    @Published var activeAccountId: String?
+    @Published private(set) var isSwitchingAccount = false
+    @Published private(set) var isRefreshingAccountQuotas = false
+    @Published private(set) var refreshingAccountIds: Set<String> = []
+    @Published var accountOperationMessage: String?
     @Published var lastError: String?
     @Published private(set) var refreshingSections: Set<RunwayRefreshSection> = []
     @Published private(set) var isRefreshingAll = false
@@ -133,6 +161,10 @@ final class RunwayModel: ObservableObject {
     private let notificationService = RunwayNotificationService()
     private let settings: RunwaySettings
     private let costProgressReporter = CostScanProgressReporter()
+    let accountStore: AccountStore
+    private let accountSwitcher: AccountSwitcher
+    private let accountImporter: AccountImporter
+    private let accountQuotaRefresher: AccountQuotaRefresher
     private var latestAuth: CodexAuth?
     private var latestQuota: QuotaSnapshot?
     private var latestResetCredits: ResetCreditsSnapshot?
@@ -153,9 +185,19 @@ final class RunwayModel: ObservableObject {
     private static let detailCostQueryID = "detail-range"
     var onFullRefreshCompleted: (() -> Void)?
 
-    init(settings: RunwaySettings, services: RunwayModelServices = .live()) {
+    init(
+        settings: RunwaySettings,
+        services: RunwayModelServices = .live(),
+        accountStore: AccountStore = AccountStore())
+    {
         self.settings = settings
         self.services = services
+        self.accountStore = accountStore
+        self.accountSwitcher = AccountSwitcher(store: accountStore)
+        self.accountImporter = AccountImporter(store: accountStore)
+        self.accountQuotaRefresher = AccountQuotaRefresher(
+            store: accountStore,
+            switcher: AccountSwitcher(store: accountStore))
         let l10n = settings.l10n
         self.statusText = l10n.text(.statusLogin)
         self.quotaText = l10n.text(.notLoaded)
@@ -175,6 +217,270 @@ final class RunwayModel: ObservableObject {
                 self?.publishCostProgress(progress)
             }
         }
+        bootstrapAccounts()
+    }
+
+    /// Sidebar order: active first, then user sort.
+    var sidebarAccounts: [ManagedAccount] {
+        AccountIndex(activeAccountId: activeAccountId, accounts: managedAccounts).orderedForSidebar()
+    }
+
+    func bootstrapAccounts() {
+        do {
+            // Repairs broken official auth.json from a usable managed account when possible.
+            let index = try accountStore.syncFromOfficialAuth()
+            publishAccountIndex(index)
+            if let auth = try? accountStore.loadOfficialAuth(), auth.loginUsability == .usable {
+                latestAuth = auth
+                accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: nil)
+            }
+        } catch {
+            // Official auth may be missing on fresh machines.
+            if let index = try? accountStore.loadIndex() {
+                publishAccountIndex(index)
+            }
+        }
+    }
+
+    func reloadAccountIndex() {
+        if let index = try? accountStore.loadIndex() {
+            publishAccountIndex(index)
+        }
+    }
+
+    func switchAccount(id: String, restartCodex: Bool = true) {
+        guard id != activeAccountId, !isSwitchingAccount else { return }
+        isSwitchingAccount = true
+        accountOperationMessage = l10n.text(.accountsSwitching)
+        Task {
+            defer {
+                isSwitchingAccount = false
+            }
+            do {
+                let result = try await accountSwitcher.switchTo(accountId: id)
+                // Drop previous account's quota/credits/cost so UI cannot keep showing the old plan.
+                clearAccountScopedState(keepingAuth: result.auth)
+                publishAccountIndex(try accountStore.loadIndex())
+                accountDisplay = CodexAccountDisplay.make(
+                    auth: result.auth,
+                    quotaPlan: result.account.planType)
+                lastError = nil
+                // Reload main panel data for the new active account (must not reuse prior meters).
+                refresh(policy: .force)
+                if restartCodex {
+                    let restart = await CodexAppRestarter.restart()
+                    if restart.relaunched || restart.terminatedCount > 0 {
+                        accountOperationMessage = l10n.text(.accountsRestartCodexSucceeded)
+                    } else {
+                        let detail = restart.message ?? "unknown"
+                        accountOperationMessage = nil
+                        lastError = String(format: l10n.text(.accountsRestartCodexFailed), detail)
+                    }
+                } else {
+                    accountOperationMessage = nil
+                }
+            } catch {
+                accountOperationMessage = nil
+                lastError = switchFailureMessage(error)
+            }
+        }
+    }
+
+    private func switchFailureMessage(_ error: Error) -> String {
+        if let storeError = error as? AccountStoreError {
+            switch storeError {
+            case .missingRefreshToken, .expiredAccessWithoutRefresh:
+                return l10n.text(.accountsSwitchSessionExpired)
+            case .notUsableAsCodexLogin, .invalidCredential:
+                return l10n.text(.accountsSwitchInvalidCredential)
+            default:
+                break
+            }
+        }
+        return "\(l10n.text(.accountsSwitchFailed)): \(error.localizedDescription)"
+    }
+
+    func isRefreshingAccountQuota(id: String) -> Bool {
+        refreshingAccountIds.contains(id) || isRefreshingAccountQuotas
+    }
+
+    func refreshAllAccountQuotas() {
+        guard !isRefreshingAccountQuotas else { return }
+        isRefreshingAccountQuotas = true
+        let ids = Set(managedAccounts.map(\.id))
+        // Reassign so @Published notifies (in-place Set mutation does not).
+        refreshingAccountIds = refreshingAccountIds.union(ids)
+        Task {
+            defer {
+                isRefreshingAccountQuotas = false
+                refreshingAccountIds = refreshingAccountIds.subtracting(ids)
+            }
+            _ = await accountQuotaRefresher.refreshAll()
+            reloadAccountIndex()
+        }
+    }
+
+    func refreshAccountQuota(id: String) {
+        guard !refreshingAccountIds.contains(id) else { return }
+        refreshingAccountIds = refreshingAccountIds.union([id])
+        Task {
+            defer { refreshingAccountIds = refreshingAccountIds.subtracting([id]) }
+            _ = await accountQuotaRefresher.refresh(accountId: id)
+            reloadAccountIndex()
+        }
+    }
+
+    func importOfficialAccount() {
+        Task {
+            do {
+                _ = try accountImporter.importOfficial(makeActive: true)
+                reloadAccountIndex()
+                accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), 1)
+                lastError = nil
+            } catch {
+                lastError = "\(l10n.text(.accountsImportFailed)): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Returns true when at least one account was imported successfully.
+    @discardableResult
+    func importPastedCredentials(_ text: String) async -> Bool {
+        let batch = await accountImporter.importPastedText(text, makeActiveFirst: managedAccounts.isEmpty)
+        reloadAccountIndex()
+        if batch.successCount > 0 {
+            accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), batch.successCount)
+            lastError = batch.failureCount > 0
+                ? "\(l10n.text(.accountsImportFailed)): \(humanizeImportFailures(batch.failures))"
+                : nil
+            refreshAllAccountQuotas()
+            return true
+        }
+        accountOperationMessage = nil
+        if batch.failures.contains("no_credentials") || batch.failures.isEmpty {
+            lastError = l10n.text(.accountsImportNoCredentials)
+        } else {
+            lastError = "\(l10n.text(.accountsImportFailed)): \(humanizeImportFailures(batch.failures))"
+        }
+        return false
+    }
+
+    private func humanizeImportFailures(_ failures: [String]) -> String {
+        failures.prefix(3).map { failure in
+            if failure == "no_credentials" {
+                return l10n.text(.accountsImportNoCredentials)
+            }
+            return failure
+        }.joined(separator: "; ")
+    }
+
+    func importCredentialFiles(_ urls: [URL]) {
+        Task {
+            let batch = await accountImporter.importFiles(at: urls, makeActiveFirst: managedAccounts.isEmpty)
+            reloadAccountIndex()
+            if batch.successCount > 0 {
+                accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), batch.successCount)
+                refreshAllAccountQuotas()
+            }
+            if batch.failureCount > 0 {
+                lastError = "\(l10n.text(.accountsImportFailed)): \(batch.failures.prefix(3).joined(separator: "; "))"
+            } else if batch.successCount > 0 {
+                lastError = nil
+            }
+        }
+    }
+
+    func importAPIKey(_ key: String) {
+        Task {
+            do {
+                _ = try accountImporter.importAPIKey(key, makeActive: managedAccounts.isEmpty)
+                reloadAccountIndex()
+                accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), 1)
+                lastError = nil
+            } catch {
+                lastError = "\(l10n.text(.accountsImportFailed)): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func startOAuthLogin() {
+        Task {
+            accountOperationMessage = l10n.text(.accountsOAuthWaiting)
+            let server = OAuthCallbackServer()
+            do {
+                let session = try CodexOAuthLogin.startSession()
+                NSWorkspace.shared.open(session.authURL)
+                let callbackURL = try await server.waitForCallback()
+                let code = try CodexOAuthLogin.authorizationCode(from: callbackURL, expectedState: session.state)
+                let exchanged = try await CodexOAuthLogin.exchangeCode(code, session: session)
+                let makeActive = managedAccounts.isEmpty
+                let account = try accountStore.upsert(auth: exchanged.auth, makeActive: makeActive)
+                if makeActive {
+                    _ = try await accountSwitcher.switchTo(accountId: account.id)
+                    refresh()
+                }
+                reloadAccountIndex()
+                accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), 1)
+                lastError = nil
+                refreshAllAccountQuotas()
+            } catch OAuthCallbackServer.ServerError.cancelled {
+                accountOperationMessage = l10n.text(.accountsOAuthCancelled)
+            } catch {
+                accountOperationMessage = nil
+                lastError = "\(l10n.text(.accountsOAuthFailed)): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func deleteAccount(id: String) {
+        Task {
+            do {
+                let wasActive = activeAccountId == id
+                try accountStore.deleteAccount(id: id)
+                reloadAccountIndex()
+                if wasActive, let next = activeAccountId {
+                    switchAccount(id: next)
+                }
+                lastError = nil
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func moveAccount(id: String, direction: Int) {
+        // direction: -1 up, +1 down in user sort (ignoring active pin).
+        var nonActive = managedAccounts
+            .filter { $0.id != activeAccountId }
+            .sorted { $0.sortIndex < $1.sortIndex }
+        guard let index = nonActive.firstIndex(where: { $0.id == id }) else { return }
+        let target = index + direction
+        guard nonActive.indices.contains(target) else { return }
+        nonActive.swapAt(index, target)
+        var orderedIds: [String] = []
+        if let activeAccountId {
+            orderedIds.append(activeAccountId)
+        }
+        orderedIds.append(contentsOf: nonActive.map(\.id))
+        // Include any missing ids.
+        for account in managedAccounts where !orderedIds.contains(account.id) {
+            orderedIds.append(account.id)
+        }
+        try? accountStore.reorder(ids: orderedIds)
+        reloadAccountIndex()
+    }
+
+    func updateAccountAlias(id: String, alias: String?) {
+        guard var account = managedAccounts.first(where: { $0.id == id }) else { return }
+        let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
+        account.alias = (trimmed?.isEmpty == false) ? trimmed : nil
+        try? accountStore.updateMetadata(account)
+        reloadAccountIndex()
+    }
+
+    private func publishAccountIndex(_ index: AccountIndex) {
+        managedAccounts = index.accounts
+        activeAccountId = index.activeAccountId
     }
 
     private var l10n: L10n { settings.l10n }
@@ -277,8 +583,16 @@ final class RunwayModel: ObservableObject {
     }
 
     func relabel() {
+        // Prefer live quota plan only when we still have a matching snapshot; else JWT/auth only.
         accountDisplay = CodexAccountDisplay.make(auth: latestAuth, quotaPlan: latestQuota?.plan)
-        if let latestQuota { applyQuota(latestQuota) } else { statusText = l10n.text(.statusLogin); quotaText = l10n.text(.notLoaded) }
+        if let latestQuota {
+            applyQuota(latestQuota)
+        } else {
+            statusText = l10n.text(.statusLogin)
+            quotaText = l10n.text(.notLoaded)
+            quotaMeters = []
+            quotaLines = []
+        }
         if let latestResetCredits { applyResetCredits(latestResetCredits) } else { resetCreditsText = l10n.text(.notLoaded) }
         if let latestDisplayedCost, let latestDisplayedCostRange {
             applyDisplayedCost(latestDisplayedCost, range: latestDisplayedCostRange, clearsScanNote: false)
@@ -375,10 +689,16 @@ final class RunwayModel: ObservableObject {
     }
 
     private func refreshNow(policy: UsageCostRefreshPolicy) async {
+        // Keep managed account list aligned with official CLI auth before loading tokens.
+        if let index = try? accountStore.syncFromOfficialAuth() {
+            publishAccountIndex(index)
+        }
         let shouldRefreshSessions = settings.preferences.showsSessionRepairSummary
         let shouldRefreshRecent = settings.preferences.showsRecentSessions
         async let sessionReport: Void = refreshSessionReportIfNeeded(shouldRefreshSessions)
         async let recentSessions: Void = refreshRecentSessionsIfNeeded(shouldRefreshRecent)
+        // Multi-account quota polling must not block the primary refresh path (or unit tests).
+        Task { await refreshAllAccountQuotasInline() }
         var remoteError: Error?
         do {
             let auth = try await loadValidAuth(preferCached: false)
@@ -403,10 +723,66 @@ final class RunwayModel: ObservableObject {
         } catch {
             remoteError = error
             statusText = l10n.text(.statusError)
+            // Auth hard-failure: keep a clear login state instead of a raw NSURLError.
+            if isAuthenticationFailure(error) {
+                accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
+                statusText = l10n.text(.statusLogin)
+            }
         }
         _ = await (sessionReport, recentSessions)
         exportStatusIfNeeded()
-        lastError = remoteError?.localizedDescription
+        lastError = remoteError.map(humanizeAuthError)
+    }
+
+    private func isAuthenticationFailure(_ error: Error) -> Bool {
+        if error is RunwayModelAuthError { return true }
+        if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+            return true
+        }
+        let ns = error as NSError
+        if ns.domain == "CodexRunwayAuth" { return true }
+        return ns.domain == NSURLErrorDomain && ns.code == URLError.userAuthenticationRequired.rawValue
+    }
+
+    private func humanizeAuthError(_ error: Error) -> String {
+        let ns = error as NSError
+        if ns.domain == "CodexRunwayAuth" {
+            switch ns.localizedDescription {
+            case "auth_file_invalid":
+                return l10n.text(.authFileInvalid)
+            case "auth_expired":
+                return l10n.text(.authExpired)
+            default:
+                return l10n.text(.authFileInvalid)
+            }
+        }
+        if isAuthenticationFailure(error) {
+            if let auth = try? accountStore.loadOfficialAuth() {
+                switch auth.loginUsability {
+                case .invalidTokens:
+                    return l10n.text(.authFileInvalid)
+                case .expiredAccessWithoutRefresh:
+                    return l10n.text(.authExpired)
+                case .usable:
+                    break
+                }
+            }
+            return l10n.text(.authExpired)
+        }
+        return error.localizedDescription
+    }
+
+    private func refreshAllAccountQuotasInline() async {
+        guard !isRefreshingAccountQuotas else { return }
+        isRefreshingAccountQuotas = true
+        let ids = Set(managedAccounts.map(\.id))
+        refreshingAccountIds = refreshingAccountIds.union(ids)
+        defer {
+            isRefreshingAccountQuotas = false
+            refreshingAccountIds = refreshingAccountIds.subtracting(ids)
+        }
+        _ = await accountQuotaRefresher.refreshAll()
+        reloadAccountIndex()
     }
 
     private func refreshSessionReportIfNeeded(_ isShown: Bool) async {
@@ -722,14 +1098,77 @@ final class RunwayModel: ObservableObject {
     private func loadValidAuth(preferCached: Bool) async throws -> CodexAuth {
         do {
             let auth = try await services.loadValidAuth(preferCached, latestAuth)
+            let previousAccountId = accountIdentityKey(for: latestAuth)
+            let nextAccountId = accountIdentityKey(for: auth)
             latestAuth = auth
-            accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: latestQuota?.plan)
+            // Only attach quota plan when it belongs to the same account identity.
+            // Otherwise a switch leaves the previous tier (e.g. Pro 5X) painted on Free.
+            let planHint = (previousAccountId != nil && previousAccountId == nextAccountId)
+                ? latestQuota?.plan
+                : nil
+            if previousAccountId != nextAccountId {
+                clearAccountScopedState(keepingAuth: auth)
+            } else {
+                accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: planHint)
+            }
+            // Only rewrite managed credentials when tokens actually changed (e.g. refresh).
+            // Re-encoding on every poll can churn auth.json-compatible fields and fight Codex.
+            if let activeAccountId {
+                let previous = try? accountStore.loadCredential(id: activeAccountId)
+                if previous != auth {
+                    try? accountStore.saveCredential(id: activeAccountId, auth: auth)
+                    // Keep official auth in sync only when this process performed a token update
+                    // and the identity still matches the active managed account.
+                    if previous != nil, previous?.tokens.accessToken != auth.tokens.accessToken
+                        || previous?.tokens.refreshToken != auth.tokens.refreshToken
+                    {
+                        try? accountStore.saveOfficialAuth(auth)
+                    }
+                }
+                if var account = managedAccounts.first(where: { $0.id == activeAccountId }) {
+                    account = account.withIdentity(from: auth, quotaPlan: planHint)
+                    try? accountStore.updateMetadata(account)
+                    reloadAccountIndex()
+                }
+            }
             return auth
         } catch RunwayModelAuthError.load(let error) {
             latestAuth = nil
             accountDisplay = CodexAccountDisplay.make(auth: nil, quotaPlan: nil)
             throw error
         }
+    }
+
+    /// Wipe meters / quota / credits that are bound to the previously active account.
+    private func clearAccountScopedState(keepingAuth auth: CodexAuth?) {
+        latestQuota = nil
+        latestResetCredits = nil
+        latestCost = nil
+        latestDisplayedCost = nil
+        latestDisplayedCostRange = nil
+        latestCurrentCycleFullWindow = nil
+        lastCostRefreshCompletedAt = nil
+        lastCostCycleIdentity = nil
+        detailCostCache = [:]
+        detailCostCacheOrder = []
+        quotaMeters = []
+        quotaLines = []
+        resetCreditSummary = nil
+        resetCreditDetails = []
+        resetCreditLines = []
+        costDetail = nil
+        costText = l10n.text(.notScanned)
+        costSubtitle = ""
+        quotaText = l10n.text(.notLoaded)
+        resetCreditsText = l10n.text(.notLoaded)
+        statusText = l10n.text(.statusLogin)
+        latestAuth = auth
+        accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: nil)
+    }
+
+    private func accountIdentityKey(for auth: CodexAuth?) -> String? {
+        guard let auth else { return nil }
+        return AccountIdentity.matchKey(for: auth)
     }
 
     private func applyQuota(_ quota: QuotaSnapshot) {

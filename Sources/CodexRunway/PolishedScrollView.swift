@@ -4,19 +4,26 @@ import SwiftUI
 struct PolishedScrollView<Content: View>: View {
     private let content: Content
     private let verticalPadding: CGFloat
+    /// Soft edge fade. Disable when a fixed toolbar sits above the scroll view so the first row is not washed out.
+    private let fadesEdges: Bool
 
-    init(verticalPadding: CGFloat = 8, @ViewBuilder content: () -> Content) {
+    init(verticalPadding: CGFloat = 8, fadesEdges: Bool = true, @ViewBuilder content: () -> Content) {
         self.verticalPadding = verticalPadding
+        self.fadesEdges = fadesEdges
         self.content = content()
     }
 
     var body: some View {
-        HiddenScrollerScrollView {
+        let scroll = HiddenScrollerScrollView {
             content
                 .padding(.vertical, verticalPadding)
                 .padding(.trailing, 4)
         }
-        .mask(verticalFade)
+        if fadesEdges {
+            scroll.mask(verticalFade)
+        } else {
+            scroll
+        }
     }
 
     private var verticalFade: some View {
@@ -66,9 +73,11 @@ private struct HiddenScrollerScrollView<Content: View>: NSViewRepresentable {
 
     private func resize(_ hostingView: NSView, in scrollView: NSScrollView) {
         let width = max(1, scrollView.contentSize.width)
+        // Size document to content only — do not stretch to the viewport height,
+        // otherwise short SwiftUI stacks appear vertically centered in the scroll area.
         hostingView.setFrameSize(NSSize(width: width, height: 1_000_000))
         hostingView.layoutSubtreeIfNeeded()
-        let height = max(scrollView.contentSize.height, hostingView.fittingSize.height)
+        let height = max(1, hostingView.fittingSize.height)
         hostingView.setFrameSize(NSSize(width: width, height: height))
     }
 }

@@ -75,8 +75,9 @@ swift run CodexRunway --self-check
 
 ## 隐私
 
-- token 只从本机 `~/.codex/auth.json` 读取。
-- access token、refresh token、id token 不会写入日志、README、issue 模板或自检输出。
+- token 从本机 `~/.codex/auth.json` 读取；多账号副本保存在 `~/.codex-runway/accounts/`（文件权限 `0600`）。
+- 切换账号会将选中凭据原子写回 `~/.codex/auth.json`，以便 Codex CLI / IDE 同步使用。
+- access token、refresh token、id token、API key 不会写入日志、README、issue 模板或自检输出。
 - API 等价成本默认来自本机会话 JSONL 日志，不上传会话内容。
 - 在线用量数据只在本地没有可用 token 数据时作为补全来源。
 - 会话修复只处理 `~/.codex/session_index.jsonl`，写入前会创建备份，不删除会话文件。

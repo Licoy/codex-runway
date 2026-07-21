@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 
 enum RunwaySidePanel: Equatable {
+    case accounts
     case resetCredits
     case apiCost
 }
@@ -57,9 +58,12 @@ struct DetailPageView: View {
     @ObservedObject var model: RunwayModel
     var l10n: L10n
     var apiCostInitialRange: ApiCostSummaryRange = .today
+    var onAddAccount: () -> Void = {}
 
     var body: some View {
         switch page {
+        case .accounts:
+            AccountsDetailView(model: model, l10n: l10n, onAddAccount: onAddAccount)
         case .resetCredits:
             PolishedScrollView(verticalPadding: 4) {
                 ResetCreditsDetailView(

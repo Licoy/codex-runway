@@ -7,7 +7,7 @@ struct RunwayPopoverView: View {
     @ObservedObject var settings: RunwaySettings
     var checkForUpdates: () -> Void
     var openGitHub: () -> Void
-    var openControlPanel: () -> Void
+    var openControlPanel: (ControlPanelTab) -> Void
 
     @State private var confirmRepair = false
     @State private var detailPage: RunwaySidePanel?
@@ -19,9 +19,19 @@ struct RunwayPopoverView: View {
             detailPage == nil ? AnyView(header) : AnyView(detailHeader)
             Divider()
             if let detailPage {
-                DetailPageView(page: detailPage, model: model, l10n: l10n, apiCostInitialRange: apiCostDetailRange)
+                DetailPageView(
+                    page: detailPage,
+                    model: model,
+                    l10n: l10n,
+                    apiCostInitialRange: apiCostDetailRange,
+                    onAddAccount: {
+                        openControlPanel(.accounts)
+                    })
             } else {
                 mainContent
+                if let message = model.accountOperationMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
                 if let error = model.lastError {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
@@ -84,14 +94,7 @@ struct RunwayPopoverView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Codex Runway").font(.title3.bold())
-                HStack(spacing: 8) {
-                    SubscriptionBadge(tier: model.accountDisplay.subscriptionTier, l10n: l10n)
-                    Text(accountDisplayName)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                accountIdentityRow
                 if let expiresAt = model.accountDisplay.subscriptionExpiresAt {
                     SubscriptionExpiryBadge(expiresAt: expiresAt, l10n: l10n)
                 }
@@ -111,6 +114,29 @@ struct RunwayPopoverView: View {
                 }
             }
         }
+    }
+
+    /// Plan badge + email; click opens multi-account detail page.
+    private var accountIdentityRow: some View {
+        Button {
+            detailPage = .accounts
+            model.reloadAccountIndex()
+        } label: {
+            HStack(spacing: 8) {
+                SubscriptionBadge(tier: model.accountDisplay.subscriptionTier, l10n: l10n)
+                Text(accountDisplayName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(l10n.text(.accounts))
     }
 
     private var accountDisplayName: String {
@@ -141,6 +167,8 @@ struct RunwayPopoverView: View {
 
     private func detailTitle(_ page: RunwaySidePanel?) -> String {
         switch page {
+        case .accounts:
+            return l10n.text(.accounts)
         case .resetCredits:
             return l10n.text(.resetCreditDetails)
         case .apiCost:
@@ -178,7 +206,9 @@ struct RunwayPopoverView: View {
 
     private var footer: some View {
         HStack {
-            Button(action: openControlPanel) {
+            Button {
+                openControlPanel(.general)
+            } label: {
                 Label(l10n.text(.settings), systemImage: "slider.horizontal.3")
             }
             .help(l10n.text(.openControlPanel))
