@@ -8,15 +8,18 @@
 
 你的 Codex 还可以跑多久？
 
-Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏里查看 Codex 配额、reset credits、API 等价成本、本机会话和更新状态。
+Codex Runway 是一个原生 macOS 状态栏应用，帮你在菜单栏查看 Codex 配额、reset credits、API 等价成本与本机会话，并支持多账号管理、安全切号与内置更新检测。
 
 ## 亮点
 
 - 菜单栏查看 Codex 剩余额度。
 - 查看 5 小时、每周和附加额度窗口。
-- 显示当前 Codex 账号和订阅类型。
+- 管理多个 Codex 账号：浏览器登录、导入本机 `auth.json`、粘贴 token / JSON（含 `/auth/session`）、导入文件或 API Key。
+- 确认后安全切号，原子写回 `~/.codex/auth.json`，可选立即重启 Codex，使 CLI / IDE 同步。
+- 显示当前账号、订阅类型与到期信息。
 - 查看 reset credits 数量、状态和到期时间。
-- 查看本周期 API 等价成本和 token 用量。
+- 查看 API 等价成本与 token 用量：今日、本周期、上周期、本月或自定义范围；设置可改主弹窗默认范围。
+- 本机会话增量索引，加速成本扫描。
 - 查看最近 Codex 会话、项目、状态和用量摘要。
 - 修复本机会话索引。
 - 支持浅色、深色、跟随系统和中英文界面。
@@ -56,8 +59,8 @@ xattr -dr com.apple.quarantine /Applications/CodexRunway.app
 ## 使用前提
 
 - macOS 12+
-- 已登录过 Codex
-- 本机存在 `~/.codex/auth.json`
+- 推荐已安装并使用过 Codex
+- 可通过本机 `~/.codex/auth.json` 导入，或在应用内添加账号（浏览器登录、粘贴凭据、导入文件等）
 
 ## 本地运行
 
@@ -75,10 +78,12 @@ swift run CodexRunway --self-check
 
 ## 隐私
 
-- token 从本机 `~/.codex/auth.json` 读取；多账号副本保存在 `~/.codex-runway/accounts/`（文件权限 `0600`）。
-- 切换账号会将选中凭据原子写回 `~/.codex/auth.json`，以便 Codex CLI / IDE 同步使用。
+- token 从本机 `~/.codex/auth.json` 读取；多账号凭据仅保存在 `~/.codex-runway/accounts/<id>/auth.json`（目录 `0700`、文件 `0600`）。账号索引 `index.json` 不含 token。
+- 用户主动切号时，才会将选中凭据原子写回 `~/.codex/auth.json`，以便 Codex CLI / IDE 同步使用。
+- 刷新非当前托管账号 token 时只更新账号库副本，不写官方 `auth.json`；刷新当前账号时同步官方 auth 与副本。
+- 无效或 mock 凭据不会写回官方 `~/.codex/auth.json`。
 - access token、refresh token、id token、API key 不会写入日志、README、issue 模板或自检输出。
-- API 等价成本默认来自本机会话 JSONL 日志，不上传会话内容。
+- API 等价成本默认来自本机会话 JSONL 日志，并在 `~/.codex-runway/` 下维护本地增量索引等派生数据；不上传会话内容。
 - 在线用量数据只在本地没有可用 token 数据时作为补全来源。
 - 会话修复只处理 `~/.codex/session_index.jsonl`，写入前会创建备份，不删除会话文件。
 - 更新检测只访问版本信息，不上传 Codex 账号或会话数据。

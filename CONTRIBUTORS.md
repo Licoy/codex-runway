@@ -13,7 +13,7 @@
 ## 可以贡献什么
 
 - Swift / AppKit / SwiftUI 功能实现。
-- 配额、reset credits、API 等价成本和会话修复逻辑的测试。
+- 配额、reset credits、API 等价成本、多账号导入/切号和会话修复逻辑的测试。
 - macOS 菜单栏、弹层和控制台体验优化。
 - 简体中文和英文文案改进。
 - 打包、CI、Release 和在线更新流程改进。
@@ -23,7 +23,7 @@
 
 - macOS 12+
 - Swift 6+
-- 本机已登录 Codex，并存在 `~/.codex/auth.json`
+- 推荐本机已使用过 Codex；可通过 `~/.codex/auth.json` 或应用内导入/登录添加测试账号
 
 常用命令：
 
@@ -55,7 +55,10 @@ ARCH=x86_64 bash Scripts/package-app.sh
 
 - 不要在代码、日志、README、issue、测试输出中写入 access token、refresh token、id token 或 API key。
 - 读取 `~/.codex/auth.json` 时只使用必要字段。
-- OAuth refresh 回写必须原子写入。
+- 多账号凭据仅允许存放在 `~/.codex-runway/accounts/<id>/auth.json`（目录 `0700`、文件 `0600`，原子写入）；账号索引 `index.json` 不得包含 token。
+- 修改官方 `~/.codex/auth.json` 仅限：OAuth refresh 回写、以及用户主动切号时的原子写入。
+- 刷新非当前托管账号 token 时只写账号库副本，不得写官方 `auth.json`；刷新当前账号时同步官方 auth 与账号库副本。
+- 无效或 mock 凭据不得写回官方 `auth.json`。
 - 会话修复只允许处理 `session_index.jsonl`，写入前必须备份。
 - 不删除 `~/.codex/sessions/**`、`~/.codex/archived_sessions/**` 或全局状态文件。
 - 更新检测只应请求 Release 元数据和 appcast，不上传 Codex 会话内容。

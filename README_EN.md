@@ -8,15 +8,18 @@
 
 How much longer can your Codex keep running?
 
-Codex Runway is a native macOS menu bar app for checking Codex quota, reset credits, API-equivalent cost, local sessions, and update status.
+Codex Runway is a native macOS menu bar app for checking Codex quota, reset credits, API-equivalent cost, and local sessions, with multi-account management, safe account switching, and built-in update checks.
 
 ## Highlights
 
 - Check remaining Codex quota from the menu bar.
 - View 5-hour, weekly, and additional quota windows.
-- Show the current Codex account and subscription tier.
+- Manage multiple Codex accounts: browser sign-in, import local `auth.json`, paste token/JSON (including `/auth/session`), import files, or add an API key.
+- Switch accounts safely after confirmation by atomically writing `~/.codex/auth.json`, with an optional Codex restart so CLI / IDE stay in sync.
+- Show the current account, subscription tier, and expiration.
 - View reset credit count, status, and expiration time.
-- View current-cycle API-equivalent cost and token usage.
+- View API-equivalent cost and token usage for today, the current cycle, the previous cycle, this month, or a custom range; the default range is configurable in settings.
+- Use a local incremental session index for faster cost scans.
 - View recent Codex sessions, projects, status, and usage summaries.
 - Repair the local session index.
 - Support light, dark, system appearance, Chinese, and English.
@@ -56,8 +59,8 @@ Then open the app again.
 ## Requirements
 
 - macOS 12+
-- A local Codex login
-- `~/.codex/auth.json` exists on this Mac
+- Codex installed and used on this Mac is recommended
+- Import from local `~/.codex/auth.json`, or add accounts in the app (browser sign-in, paste credentials, import files, and more)
 
 ## Run Locally
 
@@ -75,10 +78,12 @@ The self-check prints local diagnostics with tokens redacted.
 
 ## Privacy
 
-- Tokens are read from local `~/.codex/auth.json`; multi-account copies live under `~/.codex-runway/accounts/` (file mode `0600`).
-- Switching accounts atomically writes the selected credential back to `~/.codex/auth.json` so Codex CLI / IDE stay in sync.
+- Tokens are read from local `~/.codex/auth.json`; multi-account credentials are stored only under `~/.codex-runway/accounts/<id>/auth.json` (directory mode `0700`, file mode `0600`). The account index `index.json` never contains tokens.
+- Official `~/.codex/auth.json` is overwritten only when you confirm an account switch (atomic write), so Codex CLI / IDE stay in sync.
+- Refreshing a non-active managed account updates only its library copy, not official `auth.json`. Refreshing the active account keeps the official auth file and the library copy in sync.
+- Invalid or mock credentials are never written back to official `~/.codex/auth.json`.
 - Access tokens, refresh tokens, ID tokens, and API keys must not be written to logs, README files, issue templates, or self-check output.
-- API-equivalent cost is computed from local session JSONL logs by default and does not upload session contents.
+- API-equivalent cost is computed from local session JSONL logs by default, with derived data such as a local incremental index under `~/.codex-runway/`. Session contents are not uploaded.
 - Online usage data is used only when local token data is unavailable.
 - Session repair only touches `~/.codex/session_index.jsonl`, creates a backup before writing, and never deletes session files.
 - Update checks request only version information. Codex account and session data are not uploaded.
