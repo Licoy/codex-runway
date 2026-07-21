@@ -1114,10 +1114,21 @@ final class RunwayModel: ObservableObject {
             // Never write ~/.codex/auth.json from the poll path.
             // Official auth is only written by explicit switch, OAuth refresh (TokenRefresher + store),
             // or repair — otherwise mock/test auth or transient loads can wipe real credentials.
-            // Only mirror *usable* credentials into the managed account library.
+            //
+            // Also never overwrite a *better* managed credential with a worse/unusable one
+            // (this is how unit-test fixtures previously wiped ~/.codex-runway/accounts).
             if let activeAccountId, auth.loginUsability == .usable {
                 let previous = try? accountStore.loadCredential(id: activeAccountId)
-                if previous != auth {
+                let shouldMirror: Bool = {
+                    guard let previous else { return true }
+                    if previous == auth { return false }
+                    // Keep existing usable credential if the incoming one is weaker.
+                    if previous.loginUsability == .usable, auth.loginUsability != .usable {
+                        return false
+                    }
+                    return true
+                }()
+                if shouldMirror, previous != auth {
                     try? accountStore.saveCredential(id: activeAccountId, auth: auth)
                 }
                 if var account = managedAccounts.first(where: { $0.id == activeAccountId }) {

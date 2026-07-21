@@ -241,10 +241,17 @@ public struct AccountStore: Sendable {
 
         let match = AccountIdentity.matchKey(for: official)
         if let existing = index.accounts.first(where: { AccountIdentity.matchKey(for: $0) == match }) {
-            // Only overwrite managed credentials with official when official is usable
-            // (already gated above) — never spread a broken auth.json into the library.
-            try saveCredential(id: existing.id, auth: official)
-            var updated = existing.withIdentity(from: official, quotaPlan: existing.planType, now: now)
+            // Official is usable (gated above). Still avoid clobbering a managed credential that
+            // already has a refresh_token when official is access-token-only (session), etc.
+            let existingCred = try? loadCredential(id: existing.id)
+            let shouldReplaceManaged = shouldReplaceManagedCredential(existing: existingCred, with: official)
+            if shouldReplaceManaged {
+                try saveCredential(id: existing.id, auth: official)
+            }
+            var updated = existing.withIdentity(
+                from: shouldReplaceManaged ? official : (existingCred ?? official),
+                quotaPlan: existing.planType,
+                now: now)
             updated.lastUsedAt = now
             updated.requiresReauth = false
             updated.lastError = nil
@@ -291,6 +298,21 @@ public struct AccountStore: Sendable {
         }
         try saveIndex(index)
         return index
+    }
+
+    /// Prefer keeping a managed credential that can refresh over a weaker official snapshot.
+    private func shouldReplaceManagedCredential(existing: CodexAuth?, with incoming: CodexAuth) -> Bool {
+        guard let existing else { return true }
+        if existing == incoming { return false }
+        // Never replace a full OAuth credential (has refresh) with access-token-only session.
+        if existing.canRefreshOAuth, !incoming.canRefreshOAuth {
+            return false
+        }
+        // Never replace usable with unusable.
+        if existing.loginUsability == .usable, incoming.loginUsability != .usable {
+            return false
+        }
+        return true
     }
 
     private func atomicWriteJSON<T: Encodable>(_ value: T, to url: URL, mode: UInt16) throws {
