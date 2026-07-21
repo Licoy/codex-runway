@@ -80,9 +80,9 @@ public struct AccountStore: Sendable {
         let directory = accountDirectory(id: id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try setPOSIXPermissions(directory, mode: 0o700)
-        // Store credentials in official-compatible shape so switch can copy bytes when possible.
+        // Managed library may keep session/partial credentials; official writes stay strict.
         let store = CodexAuthStore(authURL: credentialURL(id: id))
-        try store.save(auth)
+        try store.save(auth, allowUnusable: true)
         try setPOSIXPermissions(credentialURL(id: id), mode: 0o600)
     }
 

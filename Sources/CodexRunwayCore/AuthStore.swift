@@ -12,9 +12,11 @@ public struct CodexAuthStore: Sendable {
         return try JSONDecoder().decode(CodexAuth.self, from: data)
     }
 
-    public func save(_ auth: CodexAuth) throws {
-        // Hard stop: never install placeholder / truncated credentials (e.g. unit-test fixtures).
-        guard auth.loginUsability != .invalidTokens else {
+    /// - Parameter allowUnusable: When true, permits writing incomplete credentials into the
+    ///   managed account library. Official `~/.codex/auth.json` must keep this false.
+    public func save(_ auth: CodexAuth, allowUnusable: Bool = false) throws {
+        // Hard stop for the official login file: never install placeholder / truncated tokens.
+        if !allowUnusable, auth.loginUsability == .invalidTokens {
             throw CocoaError(.fileWriteInvalidFileName)
         }
 
