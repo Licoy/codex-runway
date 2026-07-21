@@ -55,6 +55,7 @@ struct AccountsSettingsPane: View {
                     VStack(spacing: 8) {
                         ForEach(orderedAccounts) { account in
                             accountRow(account)
+                                .id("\(account.id)-\(account.resolvedDisplayName)-\(account.requiresReauth)")
                         }
                     }
                 }

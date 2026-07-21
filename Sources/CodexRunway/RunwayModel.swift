@@ -243,9 +243,19 @@ final class RunwayModel: ObservableObject {
     }
 
     func reloadAccountIndex() {
-        if let index = try? accountStore.loadIndex() {
+        do {
+            let index = try accountStore.loadIndex()
             publishAccountIndex(index)
+        } catch {
+            // Surface load failures — silent failure left the UI on a stale/empty list after import.
+            lastError = "\(l10n.text(.accountsImportFailed)): \(error.localizedDescription)"
         }
+    }
+
+    /// Publish index to UI, forcing a new array identity so SwiftUI always refreshes rows.
+    private func publishAccountIndex(_ index: AccountIndex) {
+        managedAccounts = Array(index.accounts)
+        activeAccountId = index.activeAccountId
     }
 
     func switchAccount(id: String, restartCodex: Bool = true) {
@@ -333,10 +343,12 @@ final class RunwayModel: ObservableObject {
     func importOfficialAccount() {
         Task {
             do {
-                _ = try accountImporter.importOfficial(makeActive: true)
+                let account = try accountImporter.importOfficial(makeActive: true)
                 reloadAccountIndex()
+                mergeImportedAccounts([account])
                 accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), 1)
                 lastError = nil
+                refreshAllAccountQuotas()
             } catch {
                 lastError = "\(l10n.text(.accountsImportFailed)): \(error.localizedDescription)"
             }
@@ -347,12 +359,16 @@ final class RunwayModel: ObservableObject {
     @discardableResult
     func importPastedCredentials(_ text: String) async -> Bool {
         let batch = await accountImporter.importPastedText(text, makeActiveFirst: managedAccounts.isEmpty)
+        // Reload index first so the settings list updates before the sheet closes.
         reloadAccountIndex()
+        // Optimistic merge: ensure newly imported rows are visible even if index reload races.
         if batch.successCount > 0 {
+            mergeImportedAccounts(batch.succeeded)
             accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), batch.successCount)
             lastError = batch.failureCount > 0
                 ? "\(l10n.text(.accountsImportFailed)): \(humanizeImportFailures(batch.failures))"
                 : nil
+            // Quota refresh is background; do not block list visibility on it.
             refreshAllAccountQuotas()
             return true
         }
@@ -363,6 +379,18 @@ final class RunwayModel: ObservableObject {
             lastError = "\(l10n.text(.accountsImportFailed)): \(humanizeImportFailures(batch.failures))"
         }
         return false
+    }
+
+    private func mergeImportedAccounts(_ imported: [ManagedAccount]) {
+        var byID = Dictionary(uniqueKeysWithValues: managedAccounts.map { ($0.id, $0) })
+        for account in imported {
+            byID[account.id] = account
+        }
+        managedAccounts = Array(byID.values).sorted { lhs, rhs in
+            if lhs.sortIndex != rhs.sortIndex { return lhs.sortIndex < rhs.sortIndex }
+            return lhs.resolvedDisplayName.localizedCaseInsensitiveCompare(rhs.resolvedDisplayName)
+                == .orderedAscending
+        }
     }
 
     private func humanizeImportFailures(_ failures: [String]) -> String {
@@ -379,13 +407,14 @@ final class RunwayModel: ObservableObject {
             let batch = await accountImporter.importFiles(at: urls, makeActiveFirst: managedAccounts.isEmpty)
             reloadAccountIndex()
             if batch.successCount > 0 {
+                mergeImportedAccounts(batch.succeeded)
                 accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), batch.successCount)
+                lastError = batch.failureCount > 0
+                    ? "\(l10n.text(.accountsImportFailed)): \(batch.failures.prefix(3).joined(separator: "; "))"
+                    : nil
                 refreshAllAccountQuotas()
-            }
-            if batch.failureCount > 0 {
+            } else if batch.failureCount > 0 {
                 lastError = "\(l10n.text(.accountsImportFailed)): \(batch.failures.prefix(3).joined(separator: "; "))"
-            } else if batch.successCount > 0 {
-                lastError = nil
             }
         }
     }
@@ -393,10 +422,12 @@ final class RunwayModel: ObservableObject {
     func importAPIKey(_ key: String) {
         Task {
             do {
-                _ = try accountImporter.importAPIKey(key, makeActive: managedAccounts.isEmpty)
+                let account = try accountImporter.importAPIKey(key, makeActive: managedAccounts.isEmpty)
                 reloadAccountIndex()
+                mergeImportedAccounts([account])
                 accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), 1)
                 lastError = nil
+                refreshAllAccountQuotas()
             } catch {
                 lastError = "\(l10n.text(.accountsImportFailed)): \(error.localizedDescription)"
             }
@@ -420,6 +451,7 @@ final class RunwayModel: ObservableObject {
                     refresh()
                 }
                 reloadAccountIndex()
+                mergeImportedAccounts([account])
                 accountOperationMessage = String(format: l10n.text(.accountsImportSucceeded), 1)
                 lastError = nil
                 refreshAllAccountQuotas()
@@ -476,11 +508,6 @@ final class RunwayModel: ObservableObject {
         account.alias = (trimmed?.isEmpty == false) ? trimmed : nil
         try? accountStore.updateMetadata(account)
         reloadAccountIndex()
-    }
-
-    private func publishAccountIndex(_ index: AccountIndex) {
-        managedAccounts = index.accounts
-        activeAccountId = index.activeAccountId
     }
 
     private var l10n: L10n { settings.l10n }

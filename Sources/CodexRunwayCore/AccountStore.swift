@@ -49,7 +49,7 @@ public struct AccountStore: Sendable {
         }
         let data = try Data(contentsOf: indexURL)
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .accountStoreDates
         return try decoder.decode(AccountIndex.self, from: data)
     }
 
@@ -132,19 +132,22 @@ public struct AccountStore: Sendable {
         let match = AccountIdentity.matchKey(for: auth)
         let existing = index.accounts.first { AccountIdentity.matchKey(for: $0) == match }
         let sortIndex = existing?.sortIndex ?? (index.accounts.map(\.sortIndex).max() ?? -1) + 1
+        // Always rebuild identity (email / displayName / plan) from the new credential.
         var account = ManagedAccount.make(
             id: existing?.id,
             auth: auth,
             sortIndex: sortIndex,
             alias: alias ?? existing?.alias,
             note: note ?? existing?.note,
-            quotaPlan: existing?.planType,
+            quotaPlan: nil,
             now: existing?.createdAt ?? now)
         if let existing {
             account.createdAt = existing.createdAt
             account.lastUsedAt = existing.lastUsedAt
-            account.cachedQuota = existing.cachedQuota
-            account.lastQuotaAt = existing.lastQuotaAt
+            account.sortIndex = existing.sortIndex
+            // Drop stale meters / errors so the row refreshes immediately after re-import.
+            account.cachedQuota = nil
+            account.lastQuotaAt = nil
             account.requiresReauth = false
             account.lastError = nil
         }
@@ -318,7 +321,7 @@ public struct AccountStore: Sendable {
     private func atomicWriteJSON<T: Encodable>(_ value: T, to url: URL, mode: UInt16) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .accountStoreDates
         let data = try encoder.encode(value)
         let temporary = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
@@ -339,5 +342,52 @@ public struct AccountStore: Sendable {
         let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : Character("_") }
         let cleaned = String(scalars)
         return cleaned.isEmpty ? "account" : cleaned
+    }
+}
+
+private extension JSONEncoder.DateEncodingStrategy {
+    /// Fractional-second ISO-8601 for stable round-trips of account index dates.
+    static var accountStoreDates: JSONEncoder.DateEncodingStrategy {
+        .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(AccountStoreDateFormat.string(from: date))
+        }
+    }
+}
+
+private extension JSONDecoder.DateDecodingStrategy {
+    static var accountStoreDates: JSONDecoder.DateDecodingStrategy {
+        .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = AccountStoreDateFormat.date(from: raw) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unrecognized date: \(raw)")
+        }
+    }
+}
+
+private enum AccountStoreDateFormat {
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static func string(from date: Date) -> String {
+        fractional.string(from: date)
+    }
+
+    static func date(from raw: String) -> Date? {
+        fractional.date(from: raw) ?? plain.date(from: raw)
     }
 }
