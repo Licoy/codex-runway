@@ -1111,19 +1111,14 @@ final class RunwayModel: ObservableObject {
             } else {
                 accountDisplay = CodexAccountDisplay.make(auth: auth, quotaPlan: planHint)
             }
-            // Only rewrite managed credentials when tokens actually changed (e.g. refresh).
-            // Re-encoding on every poll can churn auth.json-compatible fields and fight Codex.
-            if let activeAccountId {
+            // Never write ~/.codex/auth.json from the poll path.
+            // Official auth is only written by explicit switch, OAuth refresh (TokenRefresher + store),
+            // or repair — otherwise mock/test auth or transient loads can wipe real credentials.
+            // Only mirror *usable* credentials into the managed account library.
+            if let activeAccountId, auth.loginUsability == .usable {
                 let previous = try? accountStore.loadCredential(id: activeAccountId)
                 if previous != auth {
                     try? accountStore.saveCredential(id: activeAccountId, auth: auth)
-                    // Keep official auth in sync only when this process performed a token update
-                    // and the identity still matches the active managed account.
-                    if previous != nil, previous?.tokens.accessToken != auth.tokens.accessToken
-                        || previous?.tokens.refreshToken != auth.tokens.refreshToken
-                    {
-                        try? accountStore.saveOfficialAuth(auth)
-                    }
                 }
                 if var account = managedAccounts.first(where: { $0.id == activeAccountId }) {
                     account = account.withIdentity(from: auth, quotaPlan: planHint)

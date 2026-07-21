@@ -185,20 +185,14 @@ private struct AccountDetailCard: View {
     @ViewBuilder
     private var quotaBlock: some View {
         if let quota = account.cachedQuota {
+            // Titles follow the same windowMinutes / named-window rules as the main popover.
             VStack(alignment: .leading, spacing: 8) {
-                miniMeter(
-                    title: l10n.text(.fiveHourUsage),
-                    remaining: quota.primaryRemainingPercent,
-                    used: quota.primaryUsedPercent,
-                    resetsAt: quota.primaryResetsAt)
-                if let secondaryRemaining = quota.secondaryRemainingPercent,
-                   let secondaryUsed = quota.secondaryUsedPercent
-                {
+                ForEach(quota.meterRows()) { row in
                     miniMeter(
-                        title: l10n.text(.weeklyUsage),
-                        remaining: secondaryRemaining,
-                        used: secondaryUsed,
-                        resetsAt: quota.secondaryResetsAt)
+                        title: row.title(l10n: l10n),
+                        remaining: row.remainingPercent,
+                        used: row.usedPercent,
+                        resetsAt: row.resetsAt)
                 }
             }
         } else if account.authMode == .apiKey {
@@ -219,6 +213,8 @@ private struct AccountDetailCard: View {
                 Text(title)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer()
                 Text("\(remaining)% \(l10n.text(.left))")
                     .font(.caption2.monospacedDigit().weight(.medium))

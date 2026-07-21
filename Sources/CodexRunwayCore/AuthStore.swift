@@ -13,6 +13,11 @@ public struct CodexAuthStore: Sendable {
     }
 
     public func save(_ auth: CodexAuth) throws {
+        // Hard stop: never install placeholder / truncated credentials (e.g. unit-test fixtures).
+        guard auth.loginUsability != .invalidTokens else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+
         // Install a Codex-compatible auth.json: encode known fields, preserve any
         // non-conflicting keys that already exist (some Codex builds keep extras).
         var object: [String: Any] = [:]

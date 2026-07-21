@@ -241,6 +241,8 @@ public struct AccountStore: Sendable {
 
         let match = AccountIdentity.matchKey(for: official)
         if let existing = index.accounts.first(where: { AccountIdentity.matchKey(for: $0) == match }) {
+            // Only overwrite managed credentials with official when official is usable
+            // (already gated above) — never spread a broken auth.json into the library.
             try saveCredential(id: existing.id, auth: official)
             var updated = existing.withIdentity(from: official, quotaPlan: existing.planType, now: now)
             updated.lastUsedAt = now

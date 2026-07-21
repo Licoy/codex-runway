@@ -5,38 +5,128 @@ public enum ManagedAuthMode: String, Codable, Sendable, Equatable {
     case apiKey
 }
 
+/// One quota meter row cached for multi-account UI (mirrors main-window meters).
+public struct CachedQuotaMeterRow: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    /// Primary/secondary window length in minutes when known (drives 5h/weekly labels).
+    public var windowMinutes: Int?
+    /// Named additional limit from API (e.g. model-specific windows).
+    public var name: String?
+    public var usedPercent: Int
+    public var resetsAt: Date?
+
+    public init(
+        id: String,
+        windowMinutes: Int? = nil,
+        name: String? = nil,
+        usedPercent: Int,
+        resetsAt: Date? = nil)
+    {
+        self.id = id
+        self.windowMinutes = windowMinutes
+        self.name = name
+        self.usedPercent = max(0, min(100, usedPercent))
+        self.resetsAt = resetsAt
+    }
+
+    public var remainingPercent: Int {
+        max(0, 100 - usedPercent)
+    }
+
+    /// Same title rules as the main popover quota section.
+    public func title(l10n: L10n) -> String {
+        if let name, !name.isEmpty {
+            return name
+        }
+        switch windowMinutes {
+        case 300:
+            return l10n.text(.fiveHourUsage)
+        case 10_080:
+            return l10n.text(.weeklyUsage)
+        default:
+            return l10n.text(.quota)
+        }
+    }
+}
+
 /// Cached quota fields for sidebar / multi-account list (no secrets).
 public struct CachedAccountQuota: Codable, Sendable, Equatable {
     public var plan: String?
     public var primaryUsedPercent: Int
     public var primaryResetsAt: Date?
+    public var primaryWindowMinutes: Int?
     public var secondaryUsedPercent: Int?
     public var secondaryResetsAt: Date?
+    public var secondaryWindowMinutes: Int?
+    /// Additional named windows (model limits, etc.), same order as the main panel.
+    public var additionalMeters: [CachedQuotaMeterRow]
     public var updatedAt: Date
 
     public init(
         plan: String? = nil,
         primaryUsedPercent: Int,
         primaryResetsAt: Date? = nil,
+        primaryWindowMinutes: Int? = nil,
         secondaryUsedPercent: Int? = nil,
         secondaryResetsAt: Date? = nil,
+        secondaryWindowMinutes: Int? = nil,
+        additionalMeters: [CachedQuotaMeterRow] = [],
         updatedAt: Date = Date())
     {
         self.plan = plan
         self.primaryUsedPercent = max(0, min(100, primaryUsedPercent))
         self.primaryResetsAt = primaryResetsAt
+        self.primaryWindowMinutes = primaryWindowMinutes
         self.secondaryUsedPercent = secondaryUsedPercent.map { max(0, min(100, $0)) }
         self.secondaryResetsAt = secondaryResetsAt
+        self.secondaryWindowMinutes = secondaryWindowMinutes
+        self.additionalMeters = additionalMeters
         self.updatedAt = updatedAt
     }
 
+    enum CodingKeys: String, CodingKey {
+        case plan
+        case primaryUsedPercent
+        case primaryResetsAt
+        case primaryWindowMinutes
+        case secondaryUsedPercent
+        case secondaryResetsAt
+        case secondaryWindowMinutes
+        case additionalMeters
+        case updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        plan = try container.decodeIfPresent(String.self, forKey: .plan)
+        primaryUsedPercent = max(0, min(100, try container.decode(Int.self, forKey: .primaryUsedPercent)))
+        primaryResetsAt = try container.decodeIfPresent(Date.self, forKey: .primaryResetsAt)
+        primaryWindowMinutes = try container.decodeIfPresent(Int.self, forKey: .primaryWindowMinutes)
+        secondaryUsedPercent = try container.decodeIfPresent(Int.self, forKey: .secondaryUsedPercent).map { max(0, min(100, $0)) }
+        secondaryResetsAt = try container.decodeIfPresent(Date.self, forKey: .secondaryResetsAt)
+        secondaryWindowMinutes = try container.decodeIfPresent(Int.self, forKey: .secondaryWindowMinutes)
+        additionalMeters = try container.decodeIfPresent([CachedQuotaMeterRow].self, forKey: .additionalMeters) ?? []
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
+
     public static func make(from snapshot: QuotaSnapshot) -> CachedAccountQuota {
-        CachedAccountQuota(
+        let additional = snapshot.additionalWindows.enumerated().map { index, named in
+            CachedQuotaMeterRow(
+                id: "additional-\(index)-\(named.name)",
+                windowMinutes: named.window.windowMinutes,
+                name: named.name,
+                usedPercent: named.window.usedPercent,
+                resetsAt: named.window.resetsAt)
+        }
+        return CachedAccountQuota(
             plan: snapshot.plan,
             primaryUsedPercent: snapshot.primary.usedPercent,
             primaryResetsAt: snapshot.primary.resetsAt,
+            primaryWindowMinutes: snapshot.primary.windowMinutes,
             secondaryUsedPercent: snapshot.secondary?.usedPercent,
             secondaryResetsAt: snapshot.secondary?.resetsAt,
+            secondaryWindowMinutes: snapshot.secondary?.windowMinutes,
+            additionalMeters: additional,
             updatedAt: snapshot.updatedAt)
     }
 
@@ -46,6 +136,29 @@ public struct CachedAccountQuota: Codable, Sendable, Equatable {
 
     public var secondaryRemainingPercent: Int? {
         secondaryUsedPercent.map { max(0, 100 - $0) }
+    }
+
+    /// Display rows aligned with main-window quota meters (primary, secondary, then additional).
+    public func meterRows() -> [CachedQuotaMeterRow] {
+        var rows = [
+            CachedQuotaMeterRow(
+                id: "primary",
+                windowMinutes: primaryWindowMinutes,
+                name: nil,
+                usedPercent: primaryUsedPercent,
+                resetsAt: primaryResetsAt),
+        ]
+        if let secondaryUsedPercent {
+            rows.append(
+                CachedQuotaMeterRow(
+                    id: "secondary",
+                    windowMinutes: secondaryWindowMinutes ?? 10_080,
+                    name: nil,
+                    usedPercent: secondaryUsedPercent,
+                    resetsAt: secondaryResetsAt))
+        }
+        rows.append(contentsOf: additionalMeters)
+        return rows
     }
 }
 

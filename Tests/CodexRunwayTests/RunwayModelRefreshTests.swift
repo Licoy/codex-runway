@@ -52,7 +52,7 @@ struct RunwayModelRefreshTests {
                 await recorder.record("recent-start")
                 return SessionActivitySummary(items: [])
             })
-        let model = RunwayModel(settings: settings, services: services)
+        let model = makeModel(settings: settings, services: services)
 
         model.refresh()
         try await recorder.waitFor("cost-finish")
@@ -76,7 +76,7 @@ struct RunwayModelRefreshTests {
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateShowsCostSummary(true)
         let services = Self.costRangeServices(recorder: recorder)
-        let model = RunwayModel(settings: settings, services: services)
+        let model = makeModel(settings: settings, services: services)
 
         model.refreshCost()
 
@@ -96,9 +96,7 @@ struct RunwayModelRefreshTests {
     func ifChangedRefreshReusesRecentResults() async throws {
         let recorder = CostBatchRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
-        let model = RunwayModel(
-            settings: settings,
-            services: Self.costRangeServices(recorder: recorder))
+        let model = makeModel(settings: settings, services: Self.costRangeServices(recorder: recorder))
 
         model.refreshCost(policy: .ifChanged)
         _ = try await recorder.waitForBatch()
@@ -122,7 +120,7 @@ struct RunwayModelRefreshTests {
         settings.updateApiCostSummaryRange(.current)
         let quota = Self.quotaSnapshot(secondaryReset: Date().addingTimeInterval(10_080 * 60))
         let services = Self.costRangeServices(quota: quota, recorder: recorder)
-        let model = RunwayModel(settings: settings, services: services)
+        let model = makeModel(settings: settings, services: services)
 
         model.refreshCost()
 
@@ -147,7 +145,7 @@ struct RunwayModelRefreshTests {
         settings.updateApiCostSummaryRange(.previous)
         let quota = Self.quotaSnapshot(secondaryReset: Date().addingTimeInterval(10_080 * 60))
         let services = Self.costRangeServices(quota: quota, recorder: recorder)
-        let model = RunwayModel(settings: settings, services: services)
+        let model = makeModel(settings: settings, services: services)
 
         model.refreshCost()
 
@@ -204,7 +202,7 @@ struct RunwayModelRefreshTests {
                     plannedEntries: 0)
             },
             scanRecentSessions: { _ in SessionActivitySummary(items: []) })
-        let model = RunwayModel(settings: settings, services: services)
+        let model = makeModel(settings: settings, services: services)
 
         model.refreshCost()
         _ = try await recorder.waitForBatch()
@@ -236,7 +234,7 @@ struct RunwayModelRefreshTests {
         let completionRecorder = RefreshEventRecorder()
         let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
         settings.updateShowsCostSummary(true)
-        let model = RunwayModel(
+        let model = makeModel(
             settings: settings,
             services: Self.costRangeServices(recorder: batchRecorder))
         model.onFullRefreshCompleted = {
@@ -276,7 +274,7 @@ struct RunwayModelRefreshTests {
                     plannedEntries: 0)
             },
             scanRecentSessions: { _ in SessionActivitySummary(items: []) })
-        let model = RunwayModel(settings: settings, services: services)
+        let model = makeModel(settings: settings, services: services)
         let range = ApiCostRange.today(now: Date())
         let queryTask = Task {
             try await model.queryCost(range: range)
@@ -302,7 +300,7 @@ struct RunwayModelRefreshTests {
     func quotaLabelsFollowPrimaryWindowDuration() async throws {
         let weekly = Self.quotaSnapshot(primaryMinutes: 10_080)
         let weeklySettings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
-        let weeklyModel = RunwayModel(
+        let weeklyModel = makeModel(
             settings: weeklySettings,
             services: Self.costRangeServices(quota: weekly, recorder: CostBatchRecorder()))
 
@@ -316,7 +314,7 @@ struct RunwayModelRefreshTests {
 
         let fiveHour = Self.quotaSnapshot(primaryMinutes: 300)
         let fiveHourSettings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
-        let fiveHourModel = RunwayModel(
+        let fiveHourModel = makeModel(
             settings: fiveHourSettings,
             services: Self.costRangeServices(quota: fiveHour, recorder: CostBatchRecorder()))
 
@@ -333,6 +331,19 @@ struct RunwayModelRefreshTests {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return defaults
+    }
+
+    /// Never use the real ~/.codex / ~/.codex-runway paths in unit tests.
+    private func isolatedAccountStore() -> AccountStore {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-runway-model-test-\(UUID().uuidString)", isDirectory: true)
+        return AccountStore(
+            rootURL: root.appendingPathComponent("accounts", isDirectory: true),
+            officialAuthURL: root.appendingPathComponent("auth.json"))
+    }
+
+    private func makeModel(settings: RunwaySettings, services: RunwayModelServices) -> RunwayModel {
+        RunwayModel(settings: settings, services: services, accountStore: isolatedAccountStore())
     }
 
     private func waitForQuota(in model: RunwayModel) async throws {
@@ -363,10 +374,36 @@ struct RunwayModelRefreshTests {
     }
 
     nonisolated private static func auth() -> CodexAuth {
-        CodexAuth(
+        // Long JWT + refresh so loginUsability stays .usable (must never mirror into real ~/.codex).
+        let access = jwt(payload: [
+            "exp": 4_100_000_000,
+            "email": "test@example.com",
+            "https://api.openai.com/auth": [
+                "chatgpt_account_id": "acct-test",
+                "chatgpt_plan_type": "pro",
+            ],
+        ])
+        return CodexAuth(
             authMode: "chatgpt",
-            tokens: .init(accessToken: "token", refreshToken: "refresh", accountId: "acct"),
+            tokens: .init(
+                idToken: access,
+                accessToken: access,
+                refreshToken: "test-refresh-token-not-for-production-use",
+                accountId: "acct-test"),
             lastRefresh: nil)
+    }
+
+    nonisolated private static func jwt(payload: [String: Any]) -> String {
+        let header = #"{"alg":"none"}"#.data(using: .utf8)!
+        let body = try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        return [header, body, Data()]
+            .map {
+                $0.base64EncodedString()
+                    .replacingOccurrences(of: "+", with: "-")
+                    .replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "=", with: "")
+            }
+            .joined(separator: ".")
     }
 
     nonisolated private static func costRangeServices(
