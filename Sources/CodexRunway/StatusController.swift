@@ -10,6 +10,8 @@ final class StatusController: NSObject, NSPopoverDelegate {
     let settings = RunwaySettings()
     lazy var model = RunwayModel(settings: settings)
     private lazy var updaterService = UpdaterService(settings: settings)
+    /// Drives pause of panel-only animations while the main panel is hidden.
+    let mainPanelVisibility = MainPanelVisibility()
     private var statusMenu: NSMenu?
     private var detailsWindow: NSWindow?
     private var controlPanelWindow: NSWindow?
@@ -48,15 +50,15 @@ final class StatusController: NSObject, NSPopoverDelegate {
         popover.animates = false
         popover.delegate = self
         popover.contentSize = NSSize(width: 390, height: 560)
-        popover.contentViewController = NSHostingController(rootView: popoverView())
+        popover.contentViewController = NSHostingController(rootView: popoverRootView())
         resignActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,
             object: nil,
             queue: .main)
         { [weak self] _ in
             Task { @MainActor in
-                self?.closePopover()
-                self?.closeDetailsWindow()
+                // Full teardown: dismiss any sheet, hide panel, rebuild hosting.
+                self?.closeMainPanel()
             }
         }
         installEventMonitor()
@@ -136,20 +138,24 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     private func rebuildHostedViews() {
-        popover.contentViewController = NSHostingController(rootView: popoverView())
+        let wasVisible = isMainPanelVisible
+        // Settings change: replace hosting, keep visibility if the panel is still open.
+        popover.contentViewController = NSHostingController(rootView: popoverRootView())
         if let detailsWindow {
-            detailsWindow.contentViewController = NSHostingController(rootView: popoverView())
+            detailsWindow.contentViewController = NSHostingController(rootView: popoverRootView())
             detailsWindow.title = "Codex Runway"
         }
+        mainPanelVisibility.isVisible = wasVisible
         if let controlPanelWindow {
             controlPanelWindow.title = settings.l10n.text(.controlPanel)
         }
     }
 
-    private func popoverView() -> RunwayPopoverView {
-        RunwayPopoverView(
+    private func popoverRootView() -> some View {
+        RunwayPopoverRootView(
             model: model,
             settings: settings,
+            mainPanelVisibility: mainPanelVisibility,
             checkForUpdates: { [weak self] in self?.updaterService.checkForUpdates() },
             openGitHub: { ExternalURLLauncher.open(ControlPanelView.githubURL) },
             openControlPanel: { [weak self] tab in self?.showControlPanel(tab: tab) })
@@ -181,6 +187,8 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     private func closeMainPanel() {
+        // Always destroy sheets first, then hide hosts, then rebuild hosting so the
+        // next open never reuses a half-dismissed SwiftUI presentation.
         closePopover()
         closeDetailsWindow()
     }
@@ -193,6 +201,7 @@ final class StatusController: NSObject, NSPopoverDelegate {
             showDetailsWindow()
             return
         }
+        mainPanelVisibility.isVisible = true
         applyAppearance()
         // Key focus for active controls; safe with applicationDefined + custom dismiss.
         focusPopoverWindow()
@@ -215,7 +224,10 @@ final class StatusController: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        mainPanelVisibility.isVisible = false
         stopPopoverCloseMonitors()
+        // Destroy sheet + hosting state so the next open is clean.
+        destroyMainPanelPresentation()
     }
 
     private func startPopoverCloseMonitors() {
@@ -254,6 +266,8 @@ final class StatusController: NSObject, NSPopoverDelegate {
 
     private func shouldClosePopover(for event: NSEvent) -> Bool {
         guard popover.isShown else { return false }
+        // Clicks on the confirm sheet count as hits on the panel family (keep open).
+        // Clicks outside destroy the sheet with the panel via closePopover().
         return StatusInteraction.shouldClosePopover(
             hitStatusButton: eventHitsStatusButton(event) || eventHitsStatusButtonScreen(event),
             hitPopover: eventHitsPopover(event))
@@ -261,10 +275,58 @@ final class StatusController: NSObject, NSPopoverDelegate {
 
     private func eventHitsPopover(_ event: NSEvent) -> Bool {
         guard let popoverWindow = popover.contentViewController?.view.window else { return false }
-        if event.window === popoverWindow { return true }
+        if eventBelongsToWindowFamily(event.window, root: popoverWindow) { return true }
         // Global monitors may not attach event.window; fall back to screen coordinates.
         let screenPoint = NSEvent.mouseLocation
-        return popoverWindow.frame.contains(screenPoint)
+        if popoverWindow.frame.contains(screenPoint) { return true }
+        return sheetFrames(of: popoverWindow).contains { $0.contains(screenPoint) }
+    }
+
+    /// True when the event window is the panel or one of its sheets/children.
+    private func eventBelongsToWindowFamily(_ window: NSWindow?, root: NSWindow) -> Bool {
+        guard let window else { return false }
+        if window === root { return true }
+        if window.sheetParent === root { return true }
+        if root.attachedSheet === window { return true }
+        if root.sheets.contains(where: { $0 === window }) { return true }
+        if root.childWindows?.contains(where: { $0 === window }) == true { return true }
+        return false
+    }
+
+    private func sheetFrames(of window: NSWindow) -> [NSRect] {
+        var frames: [NSRect] = window.sheets.map(\.frame)
+        if let attached = window.attachedSheet {
+            frames.append(attached.frame)
+        }
+        return frames
+    }
+
+    /// Tear down any AppKit/SwiftUI sheets attached to the main panel window.
+    private func dismissPresentedSheets(on window: NSWindow?) {
+        guard let window else { return }
+        // End highest sheet first; bound iterations so a stubborn sheet cannot hang.
+        for _ in 0..<8 {
+            guard let sheet = window.attachedSheet ?? window.sheets.last else { break }
+            window.endSheet(sheet)
+            sheet.orderOut(nil)
+        }
+        // SwiftUI sheets may also appear as child windows of the host.
+        for child in window.childWindows ?? [] where child.isSheet || child.sheetParent === window {
+            child.orderOut(nil)
+        }
+    }
+
+    /// After the main panel is hidden: destroy sheets and rebuild hosting so the next
+    /// open never reuses half-dismissed SwiftUI presentation state (e.g. account switch sheet).
+    private func destroyMainPanelPresentation() {
+        dismissPresentedSheets(on: popover.contentViewController?.view.window)
+        dismissPresentedSheets(on: detailsWindow)
+        mainPanelVisibility.isVisible = false
+        popover.contentViewController = NSHostingController(rootView: popoverRootView())
+        if let detailsWindow {
+            detailsWindow.contentViewController = NSHostingController(rootView: popoverRootView())
+            detailsWindow.title = "Codex Runway"
+        }
     }
 
     private func eventHitsStatusButtonScreen(_ event: NSEvent) -> Bool {
@@ -280,8 +342,15 @@ final class StatusController: NSObject, NSPopoverDelegate {
 
     private func closePopover() {
         guard popover.isShown else { return }
+        // Destroy confirm sheet before hiding the host, then rebuild in popoverDidClose.
+        dismissPresentedSheets(on: popover.contentViewController?.view.window)
+        mainPanelVisibility.isVisible = false
         popover.performClose(nil)
-        stopPopoverCloseMonitors()
+        if popover.isShown {
+            // performClose can no-op; still tear down monitors and presentation.
+            stopPopoverCloseMonitors()
+            destroyMainPanelPresentation()
+        }
     }
 
     private func showDetailsWindow() {
@@ -294,8 +363,9 @@ final class StatusController: NSObject, NSPopoverDelegate {
         window.title = "Codex Runway"
         window.level = .floating
         window.isReleasedWhenClosed = false
-        window.contentViewController = NSHostingController(rootView: popoverView())
+        window.contentViewController = NSHostingController(rootView: popoverRootView())
         detailsWindow = window
+        mainPanelVisibility.isVisible = true
         applyAppearance()
         NSApp.activate(ignoringOtherApps: true)
         if isNew || !window.isVisible {
@@ -338,15 +408,24 @@ final class StatusController: NSObject, NSPopoverDelegate {
     private func shouldCloseDetailsWindow(for event: NSEvent) -> Bool {
         guard let detailsWindow, detailsWindow.isVisible else { return false }
         if eventHitsStatusButton(event) || eventHitsStatusButtonScreen(event) { return false }
-        if event.window === detailsWindow { return false }
+        // Sheet clicks stay open; outside clicks close + destroy presentation.
+        if eventBelongsToWindowFamily(event.window, root: detailsWindow) { return false }
         let screenPoint = NSEvent.mouseLocation
         if detailsWindow.frame.contains(screenPoint) { return false }
+        if sheetFrames(of: detailsWindow).contains(where: { $0.contains(screenPoint) }) { return false }
         return true
     }
 
     private func closeDetailsWindow() {
-        detailsWindow?.orderOut(nil)
+        guard let detailsWindow, detailsWindow.isVisible else {
+            stopPopoverCloseMonitors()
+            return
+        }
+        dismissPresentedSheets(on: detailsWindow)
+        mainPanelVisibility.isVisible = false
+        detailsWindow.orderOut(nil)
         stopPopoverCloseMonitors()
+        destroyMainPanelPresentation()
     }
 
     private func refreshVisiblePopoverSections() {

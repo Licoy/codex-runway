@@ -71,6 +71,7 @@ struct RunwayProgressBar: View {
     static let barHeight: CGFloat = 6
 
     var meter: QuotaMeter
+    @Environment(\.runwayPanelVisible) private var panelVisible
 
     var body: some View {
         GeometryReader { proxy in
@@ -99,7 +100,8 @@ struct RunwayProgressBar: View {
     /// Soft highlight that drifts across the filled segment.
     private func flowingHighlight(fillWidth: CGFloat, height: CGFloat) -> some View {
         let bandWidth = max(18, fillWidth * 0.38)
-        return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+        // Pause when the status panel is hidden; 20fps is enough for a soft shimmer.
+        return TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !panelVisible)) { context in
             let cycle = 1.85
             let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
             // Travel fully across the fill, including overshoot so the band exits cleanly.

@@ -305,6 +305,27 @@ struct RunwayModelRefreshTests {
         #expect(summary.isDisplayableCost)
     }
 
+    @Test("tick does not republish identical status text")
+    func tickDoesNotRepublishIdenticalStatusText() async throws {
+        let settings = RunwaySettings(store: PreferencesStore(defaults: scopedDefaults()))
+        let model = makeModel(
+            settings: settings,
+            services: Self.costRangeServices(recorder: CostBatchRecorder()))
+        model.refreshQuota()
+        try await waitForQuota(in: model)
+
+        let now = Date(timeIntervalSince1970: 1_782_710_000)
+        model.tick(now: now)
+        let first = model.statusText
+        var changeCount = 0
+        let token = model.objectWillChange.sink { _ in changeCount += 1 }
+        model.tick(now: now)
+        model.tick(now: now.addingTimeInterval(0.2))
+        #expect(model.statusText == first)
+        #expect(changeCount == 0)
+        _ = token
+    }
+
     @Test("quota labels follow the primary window duration")
     func quotaLabelsFollowPrimaryWindowDuration() async throws {
         let weekly = Self.quotaSnapshot(primaryMinutes: 10_080)

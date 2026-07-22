@@ -571,11 +571,19 @@ final class RunwayModel: ObservableObject {
     }
 
     func tick(now: Date = Date()) {
+        // Equality-guard publishes: unconditional @Published writes force the entire
+        // popover tree (including PolishedScrollView layout) to rebuild every second.
         if let latestQuota {
-            statusText = menuBarText(for: latestQuota, now: now)
+            let nextStatus = menuBarText(for: latestQuota, now: now)
+            if statusText != nextStatus {
+                statusText = nextStatus
+            }
         }
         if let latestDisplayedCost, let latestDisplayedCostRange {
-            costSubtitle = costSubtitle(for: latestDisplayedCost, range: latestDisplayedCostRange, now: now)
+            let nextSubtitle = costSubtitle(for: latestDisplayedCost, range: latestDisplayedCostRange, now: now)
+            if costSubtitle != nextSubtitle {
+                costSubtitle = nextSubtitle
+            }
         }
         refreshRateLimitResetTodayIfDue(now: now)
     }

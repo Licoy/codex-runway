@@ -1,4 +1,5 @@
 import AppKit
+import CodexRunwayCore
 
 @MainActor
 extension StatusController {
@@ -17,7 +18,7 @@ extension StatusController {
     }
 
     func updateStatusBarView() {
-        statusBarView.update(
+        let didChange = statusBarView.update(
             style: settings.preferences.statusBarDisplayStyle,
             metersDetailStyle: settings.preferences.statusBarMetersDetailStyle,
             batteryScope: settings.preferences.statusBarBatteryScope,
@@ -25,6 +26,7 @@ extension StatusController {
             language: settings.l10n.language,
             text: model.statusText,
             meters: model.quotaMeters)
+        guard didChange else { return }
         statusItem.length = statusBarView.preferredWidth
         statusItem.button?.toolTip = "Codex Runway · \(model.statusText)"
     }

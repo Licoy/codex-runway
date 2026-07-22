@@ -21,7 +21,14 @@ public enum StatusInteraction {
 
     /// Whether an outside click should dismiss the status-item popover.
     /// Status-button hits are left to the toggle path; popover content hits stay open.
-    public static func shouldClosePopover(hitStatusButton: Bool, hitPopover: Bool) -> Bool {
-        !hitStatusButton && !hitPopover
+    /// Presented sheets/modals must keep the panel open — dismissing the host while a
+    /// SwiftUI sheet is up corrupts presentation and can freeze the next open.
+    public static func shouldClosePopover(
+        hitStatusButton: Bool,
+        hitPopover: Bool,
+        hasPresentedModal: Bool = false) -> Bool
+    {
+        if hasPresentedModal { return false }
+        return !hitStatusButton && !hitPopover
     }
 }

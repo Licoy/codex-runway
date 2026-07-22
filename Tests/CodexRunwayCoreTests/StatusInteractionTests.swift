@@ -17,4 +17,18 @@ struct StatusInteractionTests {
         #expect(!StatusInteraction.shouldClosePopover(hitStatusButton: false, hitPopover: true))
         #expect(!StatusInteraction.shouldClosePopover(hitStatusButton: true, hitPopover: true))
     }
+
+    @Test("presented sheets or modals block outside-click dismiss")
+    func presentedModalBlocksDismiss() {
+        #expect(
+            !StatusInteraction.shouldClosePopover(
+                hitStatusButton: false,
+                hitPopover: false,
+                hasPresentedModal: true))
+        #expect(
+            StatusInteraction.shouldClosePopover(
+                hitStatusButton: false,
+                hitPopover: false,
+                hasPresentedModal: false))
+    }
 }

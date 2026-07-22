@@ -25,6 +25,8 @@ final class StatusBarContentView: NSView {
         }
     }
 
+    /// Returns true when the drawn content actually changed.
+    @discardableResult
     func update(
         style: StatusBarDisplayStyle,
         metersDetailStyle: StatusBarMetersDetailStyle,
@@ -32,8 +34,17 @@ final class StatusBarContentView: NSView {
         batteryDetailStyle: StatusBarBatteryDetailStyle,
         language: ResolvedLanguage,
         text: String,
-        meters: [QuotaMeter])
+        meters: [QuotaMeter]) -> Bool
     {
+        let unchanged =
+            self.style == style
+            && self.metersDetailStyle == metersDetailStyle
+            && self.batteryScope == batteryScope
+            && self.batteryDetailStyle == batteryDetailStyle
+            && self.language == language
+            && self.text == text
+            && self.meters == meters
+        guard !unchanged else { return false }
         self.style = style
         self.metersDetailStyle = metersDetailStyle
         self.batteryScope = batteryScope
@@ -43,6 +54,7 @@ final class StatusBarContentView: NSView {
         self.meters = meters
         invalidateIntrinsicContentSize()
         needsDisplay = true
+        return true
     }
 
     override var intrinsicContentSize: NSSize {

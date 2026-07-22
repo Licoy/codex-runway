@@ -44,6 +44,10 @@ private struct HiddenScrollerScrollView<Content: View>: NSViewRepresentable {
         self.content = content()
     }
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = SizingScrollView()
         let hostingView = NSHostingView(rootView: AnyView(content))
@@ -59,26 +63,54 @@ private struct HiddenScrollerScrollView<Content: View>: NSViewRepresentable {
         scrollView.documentView = hostingView
         scrollView.onLayout = { [weak scrollView, weak hostingView] in
             guard let scrollView, let hostingView else { return }
-            resize(hostingView, in: scrollView)
+            resize(hostingView, in: scrollView, coordinator: context.coordinator, force: false)
         }
-        resize(hostingView, in: scrollView)
+        resize(hostingView, in: scrollView, coordinator: context.coordinator, force: true)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let hostingView = scrollView.documentView as? NSHostingView<AnyView> else { return }
         hostingView.rootView = AnyView(content)
-        resize(hostingView, in: scrollView)
+        resize(hostingView, in: scrollView, coordinator: context.coordinator, force: true)
     }
 
-    private func resize(_ hostingView: NSView, in scrollView: NSScrollView) {
+    private func resize(
+        _ hostingView: NSView,
+        in scrollView: NSScrollView,
+        coordinator: Coordinator,
+        force: Bool)
+    {
         let width = max(1, scrollView.contentSize.width)
-        // Size document to content only — do not stretch to the viewport height,
-        // otherwise short SwiftUI stacks appear vertically centered in the scroll area.
-        hostingView.setFrameSize(NSSize(width: width, height: 1_000_000))
+        // Bounded probe height: large enough for the panel, cheap vs. 1_000_000.
+        let probeHeight: CGFloat = 8_000
+        let widthChanged = abs(coordinator.lastWidth - width) > 0.5
+        if !force && !widthChanged && coordinator.lastHeight > 0 {
+            return
+        }
+
+        hostingView.setFrameSize(NSSize(width: width, height: probeHeight))
         hostingView.layoutSubtreeIfNeeded()
         let height = max(1, hostingView.fittingSize.height)
+
+        // Skip frame writes when nothing meaningful changed (avoids layout thrash).
+        if abs(coordinator.lastWidth - width) < 0.5,
+           abs(coordinator.lastHeight - height) < 0.5,
+           abs(hostingView.frame.height - height) < 0.5
+        {
+            coordinator.lastWidth = width
+            coordinator.lastHeight = height
+            return
+        }
+
         hostingView.setFrameSize(NSSize(width: width, height: height))
+        coordinator.lastWidth = width
+        coordinator.lastHeight = height
+    }
+
+    final class Coordinator {
+        var lastWidth: CGFloat = 0
+        var lastHeight: CGFloat = 0
     }
 }
 

@@ -2,6 +2,27 @@ import AppKit
 import CodexRunwayCore
 import SwiftUI
 
+/// Root wrapper so panel visibility can refresh the environment without rebuilding
+/// `RunwayPopoverView` identity from AppKit on every show/hide.
+struct RunwayPopoverRootView: View {
+    @ObservedObject var model: RunwayModel
+    @ObservedObject var settings: RunwaySettings
+    @ObservedObject var mainPanelVisibility: MainPanelVisibility
+    var checkForUpdates: () -> Void
+    var openGitHub: () -> Void
+    var openControlPanel: (ControlPanelTab) -> Void
+
+    var body: some View {
+        RunwayPopoverView(
+            model: model,
+            settings: settings,
+            checkForUpdates: checkForUpdates,
+            openGitHub: openGitHub,
+            openControlPanel: openControlPanel)
+            .environment(\.runwayPanelVisible, mainPanelVisibility.isVisible)
+    }
+}
+
 struct RunwayPopoverView: View {
     @ObservedObject var model: RunwayModel
     @ObservedObject var settings: RunwaySettings
