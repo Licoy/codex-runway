@@ -325,7 +325,7 @@ public struct AccountStore: Sendable {
         let data = try encoder.encode(value)
         let temporary = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
-        try data.write(to: temporary, options: .completeFileProtectionUnlessOpen)
+        try data.write(to: temporary, options: .completeFileProtectionUntilFirstUserAuthentication)
         try setPOSIXPermissions(temporary, mode: mode)
         _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
         try setPOSIXPermissions(url, mode: mode)

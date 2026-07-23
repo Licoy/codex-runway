@@ -66,7 +66,7 @@ public struct CodexAuthStore: Sendable {
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporary = directory.appendingPathComponent(".auth.json.tmp-\(UUID().uuidString)")
-        try data.write(to: temporary, options: .completeFileProtectionUnlessOpen)
+        try data.write(to: temporary, options: .completeFileProtectionUntilFirstUserAuthentication)
         if FileManager.default.fileExists(atPath: url.path) {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
         } else {
